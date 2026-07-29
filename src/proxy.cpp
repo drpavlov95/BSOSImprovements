@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include "core/host.h"
+
 namespace {
 
 HMODULE g_real = nullptr;
@@ -73,8 +75,17 @@ void WINAPI Proxy_vSetDdrawflag(void) {
 
 } // extern "C"
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
-	if (reason == DLL_PROCESS_ATTACH)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
+	if (reason == DLL_PROCESS_ATTACH) {
 		DisableThreadLibraryCalls(hModule);
+		// So cria a thread. Todo o trabalho real acontece fora do loader lock,
+		// depois que a UI da aplicacao existir.
+		HostStartup(hModule);
+	}
+	else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
+		// reserved == nullptr significa FreeLibrary explicito. No encerramento
+		// do processo (reserved != nullptr) nao se mexe em mais nada.
+		HostShutdown();
+	}
 	return TRUE;
 }

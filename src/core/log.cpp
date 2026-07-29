@@ -15,7 +15,7 @@ bool g_lockReady = false;
 
 } // namespace
 
-void LogInit(bool enabled) {
+void LogInit(bool enabled, const wchar_t* tag) {
 	g_enabled = enabled;
 	if (!enabled)
 		return;
@@ -30,7 +30,7 @@ void LogInit(bool enabled) {
 		g_enabled = false;
 		return;
 	}
-	g_path = std::wstring(dir) + L"BSOSImprovements.log";
+	g_path = std::wstring(dir) + L"BSOSImprovements_" + (tag && *tag ? tag : L"Unknown") + L".log";
 
 	// Trunca a cada sessao: um log de bug report deve conter so a sessao atual.
 	HANDLE h = CreateFileW(g_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
