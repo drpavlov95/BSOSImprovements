@@ -93,5 +93,26 @@ bool SelectReference(HWND frame) {
 	}
 
 	SelectItem(tree, reference);
+
+	// A arvore usa wxTR_MULTIPLE, e nesse modo o wx mantem a propria lista de
+	// selecao. Mover so o caret nativo pode nao marcar o item como selecionado
+	// de fato, e ai o Outfit Studio nao troca de shape.
+	if (!IsSelected(tree, reference)) {
+		LogF("reference: TVM_SELECTITEM moveu o caret mas nao selecionou; simulando clique");
+		RECT rc = {};
+		if (ItemRect(tree, reference, rc)) {
+			// Garante que o item esta visivel antes de clicar nele.
+			SendMessageW(tree, TVM_ENSUREVISIBLE, 0, reinterpret_cast<LPARAM>(reference));
+			if (ItemRect(tree, reference, rc)) {
+				const LPARAM pos = MAKELPARAM((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+				SendMessageW(tree, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+				SendMessageW(tree, WM_LBUTTONUP, 0, pos);
+			}
+		}
+	}
+
+	LogF("reference: caret=%d selecionado=%d",
+		 reinterpret_cast<HTREEITEM>(SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET, 0)) == reference ? 1 : 0,
+		 IsSelected(tree, reference) ? 1 : 0);
 	return true;
 }

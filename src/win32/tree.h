@@ -14,6 +14,13 @@ std::vector<HTREEITEM> ChildItems(HWND tree, HTREEITEM parent);
 
 std::wstring ItemText(HWND tree, HTREEITEM item);
 
+// TVIS_SELECTED. Em arvore com selecao multipla o wx mantem a propria lista, e
+// mover so o caret pode nao marcar o item como selecionado de fato.
+bool IsSelected(HWND tree, HTREEITEM item);
+
+// Retangulo do item, em coordenadas do cliente da arvore.
+bool ItemRect(HWND tree, HTREEITEM item, RECT& out);
+
 // wxTreeCtrl::SetItemBold vira TVM_SETITEM com TVIS_BOLD, entao o negrito que o
 // Outfit Studio aplica no shape reference e legivel nativamente.
 bool IsBold(HWND tree, HTREEITEM item);

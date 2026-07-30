@@ -35,6 +35,29 @@ std::wstring ItemText(HWND tree, HTREEITEM item) {
 	return std::wstring(buffer);
 }
 
+bool IsSelected(HWND tree, HTREEITEM item) {
+	if (!tree || !item)
+		return false;
+
+	TVITEMW info = {};
+	info.mask = TVIF_STATE;
+	info.hItem = item;
+	info.stateMask = TVIS_SELECTED;
+	if (!SendMessageW(tree, TVM_GETITEMW, 0, reinterpret_cast<LPARAM>(&info)))
+		return false;
+
+	return (info.state & TVIS_SELECTED) != 0;
+}
+
+bool ItemRect(HWND tree, HTREEITEM item, RECT& out) {
+	if (!tree || !item)
+		return false;
+
+	// TVM_GETITEMRECT recebe o handle do item no proprio buffer do RECT.
+	*reinterpret_cast<HTREEITEM*>(&out) = item;
+	return SendMessageW(tree, TVM_GETITEMRECT, TRUE, reinterpret_cast<LPARAM>(&out)) != 0;
+}
+
 bool IsBold(HWND tree, HTREEITEM item) {
 	if (!tree || !item)
 		return false;
