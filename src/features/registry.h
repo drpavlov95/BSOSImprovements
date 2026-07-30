@@ -21,10 +21,15 @@ void RegisterFeature(const FeatureDef& def);
 const std::vector<FeatureDef>& RegisteredFeatures();
 
 // Usar no .cpp da feature:
-//   BSOS_REGISTER_FEATURE("nome", HostApp::OutfitStudio, EnabledFn, Install, Uninstall);
-#define BSOS_REGISTER_FEATURE(NAME, APP, ENABLED, INSTALL, UNINSTALL)              \
-	namespace {                                                                    \
-	struct BsosReg_##INSTALL {                                                     \
-		BsosReg_##INSTALL() { RegisterFeature({NAME, APP, ENABLED, INSTALL, UNINSTALL}); } \
-	} g_bsosReg_##INSTALL;                                                         \
+//   BSOS_REGISTER_FEATURE(hotkeys, "hotkeys", HostApp::OutfitStudio,
+//                         EnabledFn, Hotkeys::Install, Hotkeys::Uninstall)
+//
+// TAG e um identificador simples e unico por arquivo. Ele existe porque
+// INSTALL costuma ser qualificado (Hotkeys::Install), e "::" nao sobrevive
+// ao operador de colagem de tokens do pre-processador.
+#define BSOS_REGISTER_FEATURE(TAG, NAME, APP, ENABLED, INSTALL, UNINSTALL)                 \
+	namespace {                                                                            \
+	struct BsosReg_##TAG {                                                                 \
+		BsosReg_##TAG() { RegisterFeature({NAME, APP, ENABLED, INSTALL, UNINSTALL}); }      \
+	} g_bsosReg_##TAG;                                                                     \
 	}

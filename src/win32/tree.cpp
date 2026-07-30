@@ -19,6 +19,22 @@ std::vector<HTREEITEM> ChildItems(HWND tree, HTREEITEM parent) {
 	return out;
 }
 
+std::wstring ItemText(HWND tree, HTREEITEM item) {
+	if (!tree || !item)
+		return std::wstring();
+
+	wchar_t buffer[512] = {};
+	TVITEMW info = {};
+	info.mask = TVIF_TEXT;
+	info.hItem = item;
+	info.pszText = buffer;
+	info.cchTextMax = static_cast<int>(std::size(buffer));
+	if (!SendMessageW(tree, TVM_GETITEMW, 0, reinterpret_cast<LPARAM>(&info)))
+		return std::wstring();
+
+	return std::wstring(buffer);
+}
+
 bool IsBold(HWND tree, HTREEITEM item) {
 	if (!tree || !item)
 		return false;

@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include <string>
 #include <vector>
 
 // Helpers para SysTreeView32. O Outfit Studio usa wxTreeCtrl, que no MSW e
@@ -10,6 +11,8 @@
 // tocar em nenhuma estrutura interna do wxWidgets.
 
 std::vector<HTREEITEM> ChildItems(HWND tree, HTREEITEM parent);
+
+std::wstring ItemText(HWND tree, HTREEITEM item);
 
 // wxTreeCtrl::SetItemBold vira TVM_SETITEM com TVIS_BOLD, entao o negrito que o
 // Outfit Studio aplica no shape reference e legivel nativamente.

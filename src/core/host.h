@@ -24,3 +24,7 @@ HWND MainFrame();
 
 // Pasta do exe, com barra final.
 const std::wstring& AppDir();
+
+// HMODULE deste DLL. SetWindowsHookEx precisa dele: o hook proc mora aqui,
+// nao no executavel.
+HMODULE SelfModule();

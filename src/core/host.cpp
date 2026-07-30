@@ -165,3 +165,7 @@ HWND MainFrame() {
 const std::wstring& AppDir() {
 	return g_appDir;
 }
+
+HMODULE SelfModule() {
+	return g_self;
+}

@@ -18,7 +18,10 @@ struct Config {
 	bool sliderObjHotkeys = true;
 	bool referenceHotkey = true;
 
-	Hotkey selectReference = Hotkey{'R', false, false, false};
+	// 'B' e nao 'R': no vanilla, R e Recalculate Normals. B esta livre e e
+	// mnemonico de base shape, que e como o codigo do Outfit Studio chama o
+	// reference (project->IsBaseShape). Trocavel em [Hotkeys].
+	Hotkey selectReference = Hotkey{'B', false, false, false};
 	Hotkey exportSliderObj = Hotkey{'E', true, false, false};
 	Hotkey importSliderObj = Hotkey{'I', true, false, false};
 
