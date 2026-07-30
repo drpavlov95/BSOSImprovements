@@ -100,6 +100,15 @@ bool HandleBrushResizeMessage(MSG* msg) {
 			ScreenToClient(msg->hwnd, &anchor);
 			SendMessageW(msg->hwnd, WM_MOUSEMOVE, msg->wParam,
 						 MAKELPARAM(static_cast<WORD>(anchor.x), static_cast<WORD>(anchor.y)));
+
+			// E preciso forcar o repaint. O Outfit Studio so redesenha a cena
+			// no arrasto com botao pressionado: o branch de mouse solto do
+			// OnMouseMove atualiza o cursor e a barra de status, mas nunca
+			// chama RenderOneFrame. E o OnIncBrush, sendo comando de menu, nao
+			// chama nenhum dos dois -- so o caminho de S + roda faz isso.
+			// Sem isto o brush muda de tamanho por dentro e a tela nao mostra.
+			InvalidateRect(msg->hwnd, nullptr, FALSE);
+			UpdateWindow(msg->hwnd);
 			return true;
 		}
 		case WM_LBUTTONDOWN:
@@ -136,34 +145,46 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
-	// So dentro da janela principal. Com um dialogo modal aberto (arquivo,
-	// propriedades) a tecla nao pode disparar comando da janela de tras.
-	if (msg->hwnd != g_frame && !IsChild(g_frame, msg->hwnd))
-		return CallNextHookEx(g_hook, code, wParam, lParam);
-
-	// Guarda obrigatoria: sem ela, digitar "B" no filtro de sliders viraria
-	// atalho. O proprio OutfitStudio::CharHook do upstream toma esse cuidado.
-	if (IsTextInputFocused())
-		return CallNextHookEx(g_hook, code, wParam, lParam);
-
 	const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 	const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 	const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
 	const UINT vk = static_cast<UINT>(msg->wParam);
 
+	// Casar primeiro, checar as guardas depois. Assim o log consegue dizer que
+	// a tecla certa chegou e o que a bloqueou, em vez de so silenciar.
+	const Binding* match = nullptr;
 	for (const Binding& binding : g_bindings) {
-		if (!HotkeyMatches(binding.key, vk, shift, ctrl, alt))
-			continue;
-		if (!binding.action())
-			break; // casou mas nao agiu: deixa a tecla seguir para o app
+		if (HotkeyMatches(binding.key, vk, shift, ctrl, alt)) {
+			match = &binding;
+			break;
+		}
+	}
+	if (!match)
+		return CallNextHookEx(g_hook, code, wParam, lParam);
 
-		// Consome, para o acelerador do wx tambem nao disparar.
-		msg->message = WM_NULL;
-		msg->wParam = 0;
-		msg->lParam = 0;
-		break;
+	// So dentro da janela principal. Com um dialogo modal aberto (arquivo,
+	// propriedades) a tecla nao pode disparar comando da janela de tras.
+	if (msg->hwnd != g_frame && !IsChild(g_frame, msg->hwnd)) {
+		LogF("'%s': tecla chegou de uma janela de fora do frame (hwnd=%p), ignorada",
+			 match->name.c_str(), static_cast<void*>(msg->hwnd));
+		return CallNextHookEx(g_hook, code, wParam, lParam);
 	}
 
+	// Guarda obrigatoria: sem ela, digitar "B" no filtro de sliders viraria
+	// atalho. O proprio OutfitStudio::CharHook do upstream toma esse cuidado.
+	if (IsTextInputFocused()) {
+		LogF("'%s': bloqueado, o foco esta num campo de texto (classe '%ls')",
+			 match->name.c_str(), ClassOf(GetFocus()).c_str());
+		return CallNextHookEx(g_hook, code, wParam, lParam);
+	}
+
+	if (!match->action())
+		return CallNextHookEx(g_hook, code, wParam, lParam); // casou mas nao agiu
+
+	// Consome, para o acelerador do wx tambem nao disparar.
+	msg->message = WM_NULL;
+	msg->wParam = 0;
+	msg->lParam = 0;
 	return CallNextHookEx(g_hook, code, wParam, lParam);
 }
 
