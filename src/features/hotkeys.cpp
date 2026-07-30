@@ -52,7 +52,7 @@ bool ActionBeginBrushResize() {
 		return true; // ja no modo: engole a tecla repetida
 	POINT cursor = {};
 	GetCursorPos(&cursor);
-	BrushResize::Begin(cursor.x);
+	BrushResize::Begin(cursor.x, cursor.y);
 	return true;
 }
 
@@ -85,8 +85,9 @@ bool HandleBrushResizeMessage(MSG* msg) {
 				BrushResize::Confirm();
 				return false;
 			}
-			BrushResize::OnMouseMove(msg->pt.x);
-			return false; // nao consome: o app precisa redesenhar o cursor
+			// Consome o movimento do usuario e deixa passar so o retorno do
+			// cursor a ancora, para o brush mudar de tamanho sem se mover.
+			return BrushResize::OnMouseMove(msg->pt.x, msg->pt.y);
 		}
 		case WM_LBUTTONDOWN:
 		case WM_LBUTTONDBLCLK:

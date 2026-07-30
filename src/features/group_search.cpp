@@ -37,8 +37,11 @@ const int kIdCheckVisible = kGroupSearchCheckVisible;
 const int kIdClearAll = kGroupSearchClearAll;
 const int kIdCounter = kGroupSearchCounter;
 
+const UINT_PTR kFrameSubclassId = 0xB506;
+
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
+UINT g_showMsg = 0;
 bool g_busy = false; // reentrancia: o nosso proprio dialogo tambem ativa
 
 std::vector<std::wstring> g_allGroups;  // todos os nomes, ordem original
@@ -409,11 +412,29 @@ void HandleChooseGroupsDialog(HWND dlg) {
 	for (size_t i = 0; i < g_allGroups.size(); ++i)
 		g_checked[i] = std::find(active.begin(), active.end(), g_allGroups[i]) != active.end();
 
-	// Dispensa o do wx: assim o BodySlide nao faz nada e nos assumimos.
-	EndDialog(dlg, IDCANCEL);
+	// Dispensa o dialogo do wx.
+	//
+	// EndDialog NAO serve aqui: ela e do dialog manager do Windows, e o
+	// wxWidgets cria a janela com a classe #32770 mas roda o proprio loop
+	// modal. Chamar EndDialog nao faz nada, e o dialogo original acaba
+	// aparecendo depois do nosso. WM_CLOSE cai no wxDialog::OnCloseWindow,
+	// que faz EndModal(wxID_CANCEL) -- o caminho de cancelamento de verdade.
+	ShowWindow(dlg, SW_HIDE);
+	PostMessageW(dlg, WM_CLOSE, 0, 0);
 
-	if (ShowOurDialog(g_frame) != IDOK)
+	// Nosso dialogo so pode abrir depois que o loop modal do wx terminar,
+	// senao ficariamos com dois modais aninhados. Por isso vai por mensagem
+	// adiada, tratada no subclass do frame.
+	if (g_showMsg)
+		PostMessageW(g_frame, g_showMsg, 0, 0);
+}
+
+// Roda no frame, ja fora do loop modal do dialogo do wx.
+void ShowAndApply() {
+	if (ShowOurDialog(g_frame) != IDOK) {
+		LogF("group_search: cancelado");
 		return;
+	}
 
 	std::vector<std::wstring> selected;
 	for (size_t i = 0; i < g_allGroups.size(); ++i)
@@ -422,6 +443,15 @@ void HandleChooseGroupsDialog(HWND dlg) {
 
 	WriteFilter(g_frame, JoinFilterTokens(selected));
 	LogF("group_search: aplicado, %d grupos marcados", static_cast<int>(selected.size()));
+}
+
+LRESULT CALLBACK FrameSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+								   UINT_PTR, DWORD_PTR) {
+	if (g_showMsg && msg == g_showMsg) {
+		ShowAndApply();
+		return 0;
+	}
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 LRESULT CALLBACK CbtProc(int code, WPARAM wParam, LPARAM lParam) {
@@ -446,8 +476,17 @@ LRESULT CALLBACK CbtProc(int code, WPARAM wParam, LPARAM lParam) {
 
 void InstallHere(void*) {
 	g_hook = SetWindowsHookExW(WH_CBT, CbtProc, SelfModule(), GetCurrentThreadId());
-	if (!g_hook)
+	if (!g_hook) {
 		LogF("group_search: SetWindowsHookEx(WH_CBT) falhou (erro %lu)", GetLastError());
+		return;
+	}
+	if (!SetWindowSubclass(g_frame, FrameSubclassProc, kFrameSubclassId, 0))
+		LogF("group_search: SetWindowSubclass no frame falhou");
+}
+
+void UninstallHere(void*) {
+	if (g_frame && IsWindow(g_frame))
+		RemoveWindowSubclass(g_frame, FrameSubclassProc, kFrameSubclassId);
 }
 
 bool Enabled(const Config& cfg) {
@@ -528,6 +567,9 @@ bool Install(HWND frame) {
 	INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_LISTVIEW_CLASSES};
 	InitCommonControlsEx(&icc);
 
+	if (!g_showMsg)
+		g_showMsg = RegisterWindowMessageW(L"BSOSImprovements_ShowGroupSearch");
+
 	if (!RunOnUiThread(frame, InstallHere, nullptr))
 		return false;
 	return g_hook != nullptr;
@@ -538,6 +580,8 @@ void Uninstall() {
 		UnhookWindowsHookEx(g_hook);
 		g_hook = nullptr;
 	}
+	if (g_frame)
+		RunOnUiThread(g_frame, UninstallHere, nullptr);
 	g_frame = nullptr;
 	g_allGroups.clear();
 	g_checked.clear();

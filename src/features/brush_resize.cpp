@@ -17,6 +17,8 @@ constexpr int kMaxSteps = 300;
 
 bool g_active = false;
 int g_anchorX = 0;
+int g_anchorY = 0;
+int g_totalDelta = 0; // deslocamento acumulado, ja que o cursor volta sempre
 int g_applied = 0;
 HWND g_frame = nullptr;
 MenuPath g_increase;
@@ -79,17 +81,31 @@ bool IsActive() {
 	return g_active;
 }
 
-void Begin(int anchorScreenX) {
+void Begin(int anchorScreenX, int anchorScreenY) {
 	g_active = true;
 	g_anchorX = anchorScreenX;
+	g_anchorY = anchorScreenY;
+	g_totalDelta = 0;
 	g_applied = 0;
-	LogF("brush resize: entrou no modo (ancora x=%d)", anchorScreenX);
+	LogF("brush resize: entrou no modo (ancora %d,%d)", anchorScreenX, anchorScreenY);
 }
 
-void OnMouseMove(int screenX) {
+bool OnMouseMove(int screenX, int screenY) {
 	if (!g_active)
-		return;
-	ApplySteps(StepsToApply(screenX - g_anchorX, Cfg().brushResizeSensitivity, g_applied));
+		return false;
+
+	// O movimento gerado pelo nosso proprio SetCursorPos: deixa passar, para o
+	// app redesenhar o circulo no tamanho novo, na posicao de sempre.
+	if (screenX == g_anchorX && screenY == g_anchorY)
+		return false;
+
+	g_totalDelta += screenX - g_anchorX;
+	ApplySteps(StepsToApply(g_totalDelta, Cfg().brushResizeSensitivity, g_applied));
+
+	// Prende o cursor. O app nunca ve o ponteiro sair do lugar, entao o brush
+	// muda de tamanho sem se mover.
+	SetCursorPos(g_anchorX, g_anchorY);
+	return true;
 }
 
 void Confirm() {

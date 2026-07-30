@@ -19,8 +19,16 @@ bool Install(HWND frame);
 void Uninstall();
 
 bool IsActive();
-void Begin(int anchorScreenX);
-void OnMouseMove(int screenX);
+void Begin(int anchorScreenX, int anchorScreenY);
+
+// Devolve true se a mensagem deve ser consumida.
+//
+// Enquanto o modo esta ligado o cursor fica preso na ancora: cada movimento e
+// contabilizado e o cursor volta para o lugar. Sem isso o app tambem receberia
+// o movimento e arrastaria o brush pela tela, em vez de so mudar o tamanho --
+// que e como o Blender se comporta.
+bool OnMouseMove(int screenX, int screenY);
+
 void Confirm();
 void Cancel();
 
