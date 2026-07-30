@@ -1,37 +1,30 @@
 #include "features/hotkeys.h"
 
+#include <functional>
+#include <string>
 #include <vector>
 
 #include "core/host.h"
 #include "core/log.h"
 #include "core/ui_thread.h"
+#include "features/brush_resize.h"
 #include "features/outfit_tree.h"
 #include "features/registry.h"
 #include "features/slider_menu.h"
 #include "win32/winfind.h"
+#include "xrcmap.h"
 
 namespace {
 
 struct Binding {
 	Hotkey key;
-	const char* name;
-	bool (*action)(); // true = consumiu a tecla
+	std::string name;
+	std::function<bool()> action; // true = consumiu a tecla
 };
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 std::vector<Binding> g_bindings;
-
-#ifdef BSOS_TRACE_KEYS
-volatile LONG g_hookCalls = 0;
-volatile LONG g_keyDowns = 0;
-#define BSOS_COUNT_HOOK() InterlockedIncrement(&g_hookCalls)
-#define BSOS_COUNT_KEY() InterlockedIncrement(&g_keyDowns)
-#else
-#define BSOS_COUNT_HOOK() ((void)0)
-#define BSOS_COUNT_KEY() ((void)0)
-#endif
-
 SliderMenuRefs g_sliderMenu;
 
 bool ActionSelectReference() {
@@ -40,39 +33,94 @@ bool ActionSelectReference() {
 	return selected;
 }
 
-// Os dois abaixo so agem em edit mode. Fora dele devolvem false, e a tecla
+// Os dois de slider so agem em edit mode. Fora dele devolvem false, e a tecla
 // segue para a aplicacao em vez de ser engolida.
 bool ActionExportSliderObj() {
-	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
-		LogF("atalho de export OBJ: fora do edit mode, ignorado");
+	if (!IsSliderEditModeActive(g_frame, g_sliderMenu))
 		return false;
-	}
-	bool sent = InvokeMenuCommand(g_frame, g_sliderMenu.exportObjItem);
-	LogF("atalho de export OBJ: %s", sent ? "comando enviado" : "falhou");
-	return sent;
+	return InvokeMenuCommand(g_frame, g_sliderMenu.exportObjItem);
 }
 
 bool ActionImportSliderObj() {
-	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
-		LogF("atalho de import OBJ: fora do edit mode, ignorado");
+	if (!IsSliderEditModeActive(g_frame, g_sliderMenu))
 		return false;
+	return InvokeMenuCommand(g_frame, g_sliderMenu.importObjItem);
+}
+
+bool ActionBeginBrushResize() {
+	if (BrushResize::IsActive())
+		return true; // ja no modo: engole a tecla repetida
+	POINT cursor = {};
+	GetCursorPos(&cursor);
+	BrushResize::Begin(cursor.x);
+	return true;
+}
+
+// Registra evitando conflito: a primeira entrada com uma dada tecla vence.
+void AddBinding(const Hotkey& key, const std::string& name, std::function<bool()> action) {
+	if (!key.IsValid())
+		return;
+
+	for (const Binding& existing : g_bindings) {
+		if (HotkeyMatches(existing.key, key.vk, key.shift, key.ctrl, key.alt)) {
+			LogF("hotkeys: '%s' ignorado, a tecla ja pertence a '%s'", name.c_str(), existing.name.c_str());
+			return;
+		}
 	}
-	bool sent = InvokeMenuCommand(g_frame, g_sliderMenu.importObjItem);
-	LogF("atalho de import OBJ: %s", sent ? "comando enviado" : "falhou");
-	return sent;
+	g_bindings.push_back({key, name, std::move(action)});
+}
+
+// Enquanto o modo de resize esta ligado, o mouse e as teclas de saida tem
+// precedencia sobre qualquer atalho.
+bool HandleBrushResizeMessage(MSG* msg) {
+	if (!BrushResize::IsActive())
+		return false;
+
+	switch (msg->message) {
+		case WM_MOUSEMOVE: {
+			// Perdeu o foco no meio do arrasto (alt-tab): sai sem restaurar,
+			// para nao mexer no brush pelas costas do usuario.
+			HWND foreground = GetForegroundWindow();
+			if (foreground != g_frame && !IsChild(g_frame, foreground)) {
+				BrushResize::Confirm();
+				return false;
+			}
+			BrushResize::OnMouseMove(msg->pt.x);
+			return false; // nao consome: o app precisa redesenhar o cursor
+		}
+		case WM_LBUTTONDOWN:
+		case WM_LBUTTONDBLCLK:
+			BrushResize::Confirm();
+			return true; // consome, senao o clique vira pincelada no mesh
+		case WM_RBUTTONDOWN:
+			BrushResize::Cancel();
+			return true;
+		case WM_KEYDOWN:
+			if (msg->wParam == VK_ESCAPE) {
+				BrushResize::Cancel();
+				return true;
+			}
+			return false;
+		default:
+			return false;
+	}
 }
 
 LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
-	BSOS_COUNT_HOOK();
-
 	if (code != HC_ACTION || wParam != PM_REMOVE)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
 	MSG* msg = reinterpret_cast<MSG*>(lParam);
+
+	if (HandleBrushResizeMessage(msg)) {
+		msg->message = WM_NULL;
+		msg->wParam = 0;
+		msg->lParam = 0;
+		return CallNextHookEx(g_hook, code, wParam, lParam);
+	}
+
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
-
-	BSOS_COUNT_KEY();
 
 	// So dentro da janela principal. Com um dialogo modal aberto (arquivo,
 	// propriedades) a tecla nao pode disparar comando da janela de tras.
@@ -113,7 +161,7 @@ void InstallHookHere(void*) {
 }
 
 bool HotkeysEnabled(const Config& cfg) {
-	return cfg.referenceHotkey || cfg.sliderObjHotkeys;
+	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag || !cfg.remaps.empty();
 }
 
 } // namespace
@@ -132,17 +180,33 @@ bool Install(HWND frame) {
 	g_frame = frame;
 	const Config& cfg = Cfg();
 
-	if (cfg.referenceHotkey && cfg.selectReference.IsValid())
-		g_bindings.push_back({cfg.selectReference, "selecionar reference", ActionSelectReference});
+	if (cfg.referenceHotkey)
+		AddBinding(cfg.selectReference, "selecionar reference", ActionSelectReference);
 
 	if (cfg.sliderObjHotkeys) {
 		g_sliderMenu = ResolveSliderMenu(AppDir());
 		if (g_sliderMenu.ok) {
-			if (cfg.exportSliderObj.IsValid())
-				g_bindings.push_back({cfg.exportSliderObj, "export slider OBJ", ActionExportSliderObj});
-			if (cfg.importSliderObj.IsValid())
-				g_bindings.push_back({cfg.importSliderObj, "import slider OBJ", ActionImportSliderObj});
+			AddBinding(cfg.exportSliderObj, "export slider OBJ", ActionExportSliderObj);
+			AddBinding(cfg.importSliderObj, "import slider OBJ", ActionImportSliderObj);
 		}
+	}
+
+	if (cfg.brushResizeDrag && BrushResize::Install(frame))
+		AddBinding(cfg.brushResize, "redimensionar brush", ActionBeginBrushResize);
+
+	// [Remap]: qualquer tecla ligada a qualquer comando de menu. Resolvido
+	// agora para nao pagar a leitura do XRC a cada tecla.
+	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
+	for (const RemapEntry& entry : cfg.remaps) {
+		MenuPath path = ResolveMenuPath(xrc.c_str(), entry.xrcName.c_str());
+		if (path.empty()) {
+			// Nome errado no INI nao pode derrubar os outros atalhos.
+			LogF("remap: '%s' nao existe no XRC, ignorado", entry.xrcName.c_str());
+			continue;
+		}
+		HWND frameCopy = frame;
+		AddBinding(entry.key, "remap " + entry.xrcName,
+				   [frameCopy, path]() { return InvokeMenuCommand(frameCopy, path); });
 	}
 
 	if (g_bindings.empty()) {
@@ -150,29 +214,15 @@ bool Install(HWND frame) {
 		return false;
 	}
 
-	// Instalar da thread de bootstrap nao serve: hooks e subclasses precisam
-	// da thread dona da janela.
+	// Instalar da thread de bootstrap nao serve: hooks precisam da thread dona
+	// da janela.
 	if (!RunOnUiThread(frame, InstallHookHere, nullptr) || !g_hook) {
 		g_bindings.clear();
 		return false;
 	}
 
 	for (const Binding& binding : g_bindings)
-		LogF("hotkeys: '%s' ligado", binding.name);
-
-#ifdef BSOS_TRACE_KEYS
-	CreateThread(
-		nullptr, 0,
-		[](LPVOID) -> DWORD {
-			for (int i = 0; i < 20; ++i) {
-				Sleep(1000);
-				LogF("diag: chamadas=%ld keydowns=%ld", g_hookCalls, g_keyDowns);
-			}
-			return 0;
-		},
-		nullptr, 0, nullptr);
-#endif
-
+		LogF("hotkeys: '%s' ligado", binding.name.c_str());
 	return true;
 }
 
@@ -181,6 +231,7 @@ void Uninstall() {
 		UnhookWindowsHookEx(g_hook);
 		g_hook = nullptr;
 	}
+	BrushResize::Uninstall();
 	g_bindings.clear();
 	g_frame = nullptr;
 }

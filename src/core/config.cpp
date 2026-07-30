@@ -40,7 +40,58 @@ Hotkey ReadHotkey(const wchar_t* ini, const wchar_t* key, Hotkey fallback) {
 	return parsed.IsValid() ? parsed : fallback;
 }
 
+// GetPrivateProfileInt nao le decimais, entao a sensibilidade vai por string.
+float ReadFloat(const wchar_t* ini, const wchar_t* section, const wchar_t* key, float fallback) {
+	wchar_t raw[64] = {};
+	GetPrivateProfileStringW(section, key, L"", raw, 64, ini);
+	if (raw[0] == L'\0')
+		return fallback;
+
+	wchar_t* end = nullptr;
+	float value = wcstof(raw, &end);
+	if (end == raw || value <= 0.0f)
+		return fallback; // lixo ou valor sem sentido: mantem o default
+	return value;
+}
+
 } // namespace
+
+std::vector<RemapEntry> ReadRemapSection(const wchar_t* iniPath) {
+	std::vector<RemapEntry> entries;
+	if (!iniPath || !*iniPath)
+		return entries;
+
+	// GetPrivateProfileSection devolve "chave=valor\0chave=valor\0\0".
+	std::vector<wchar_t> buffer(8192);
+	DWORD used = GetPrivateProfileSectionW(L"Remap", buffer.data(),
+										   static_cast<DWORD>(buffer.size()), iniPath);
+	if (used == 0 || used >= buffer.size() - 2)
+		return entries;
+
+	for (const wchar_t* line = buffer.data(); *line; line += wcslen(line) + 1) {
+		const wchar_t* eq = wcschr(line, L'=');
+		if (!eq || eq == line)
+			continue;
+
+		std::string name;
+		for (const wchar_t* p = line; p < eq; ++p)
+			name.push_back(*p < 128 ? static_cast<char>(*p) : '?');
+
+		std::string spec;
+		for (const wchar_t* p = eq + 1; *p; ++p)
+			spec.push_back(*p < 128 ? static_cast<char>(*p) : '?');
+
+		RemapEntry entry;
+		entry.xrcName = Trim(name);
+		entry.key = ParseHotkey(spec.c_str());
+		if (entry.xrcName.empty() || !entry.key.IsValid())
+			continue; // spec invalido: ignora a linha, nao derruba as outras
+
+		entries.push_back(entry);
+	}
+
+	return entries;
+}
 
 Hotkey ParseHotkey(const char* spec) {
 	Hotkey invalid;
@@ -96,9 +147,15 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.sliderObjHotkeys = ReadBool(iniPath, L"Features", L"SliderOBJHotkeys", c.sliderObjHotkeys);
 	c.referenceHotkey = ReadBool(iniPath, L"Features", L"ReferenceHotkey", c.referenceHotkey);
 
+	c.brushResizeDrag = ReadBool(iniPath, L"Features", L"BrushResizeDrag", c.brushResizeDrag);
+
 	c.selectReference = ReadHotkey(iniPath, L"SelectReference", c.selectReference);
 	c.exportSliderObj = ReadHotkey(iniPath, L"ExportSliderOBJ", c.exportSliderObj);
 	c.importSliderObj = ReadHotkey(iniPath, L"ImportSliderOBJ", c.importSliderObj);
+	c.brushResize = ReadHotkey(iniPath, L"BrushResize", c.brushResize);
+
+	c.brushResizeSensitivity = ReadFloat(iniPath, L"Tuning", L"BrushResizeSensitivity", c.brushResizeSensitivity);
+	c.remaps = ReadRemapSection(iniPath);
 
 	c.logFile = ReadBool(iniPath, L"Debug", L"LogFile", c.logFile);
 	return c;
