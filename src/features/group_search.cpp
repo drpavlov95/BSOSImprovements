@@ -285,7 +285,22 @@ HWND FindChoiceListBox(HWND dlg) {
 		}
 	}
 
-	return (listBoxes == 1 && buttons >= 2) ? listBox : nullptr;
+	if (listBoxes != 1 || buttons < 2 || !listBox)
+		return nullptr;
+
+	// Exatamente um listbox e dois botoes tambem descreve varios outros
+	// dialogos. O que distingue um wxCheckListBox e ele ser owner-drawn: o wx
+	// desenha a caixinha de marcacao por conta propria. Um listbox comum nao
+	// tem esse estilo.
+	const LONG style = GetWindowLongW(listBox, GWL_STYLE);
+	if ((style & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) == 0)
+		return nullptr;
+
+	// E precisa ter conteudo para ler.
+	if (SendMessageW(listBox, LB_GETCOUNT, 0, 0) <= 0)
+		return nullptr;
+
+	return listBox;
 }
 
 std::vector<std::wstring> ReadGroupNames(HWND listBox) {
@@ -422,6 +437,9 @@ LRESULT CALLBACK CbtProc(int code, WPARAM wParam, LPARAM lParam) {
 	g_busy = true;
 	HandleChooseGroupsDialog(candidate);
 	g_busy = false;
+
+	// Titulo so no log, nunca no criterio: o BodySlide e traduzido.
+	LogF("group_search: dialogo '%ls' avaliado", TextOf(candidate).c_str());
 
 	return CallNextHookEx(g_hook, code, wParam, lParam);
 }

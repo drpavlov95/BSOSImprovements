@@ -46,15 +46,33 @@ escreve "b".
 
 ## Instalação
 
-**Mod Organizer 2 / Vortex:** instale como qualquer outro mod e ative.
+**O `msimg32.dll` precisa ficar na mesma pasta que o `BodySlide x64.exe`.** Não é
+preferência de organização: ele é um import estático dos executáveis, e o loader do
+Windows resolve imports estáticos a partir do diretório do próprio `.exe`, antes de
+qualquer camada de virtualização ter chance de opinar.
 
-**Manual:** copie a pasta `CalienteTools` para dentro da pasta onde está o
-`BodySlide x64.exe`, de forma que o `msimg32.dll` fique ao lado do executável.
+**Mod Organizer 2 — não instale como um mod separado.** O VFS do MO2 mapeia mods para o
+`Data` do jogo, nunca para dentro da pasta de outro mod, então um mod separado nunca
+seria carregado. Em vez disso, faça uma das duas:
+
+- instale o arquivo **por cima** do mod "BodySlide and Outfit Studio", escolhendo
+  mesclar quando o MO2 perguntar; ou
+- copie os dois arquivos direto para
+  `mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\`.
+
+**Vortex ou instalação manual:** extraia o conteúdo do arquivo dentro da pasta que
+contém o `BodySlide x64.exe`, de forma que o `msimg32.dll` fique ao lado dele.
+
+Abrir o BodySlide pelo MO2 continua funcionando normalmente — o MO2 lança o executável
+pelo caminho real dele, que é exatamente onde o DLL está.
 
 Requer os executáveis **x64** (`BodySlide x64.exe` e `OutfitStudio x64.exe`). Os de 32
 bits continuam abrindo normalmente, mas sem as melhorias.
 
 Para desinstalar, apague `msimg32.dll` e `BSOSImprovements.ini`.
+
+> Se você atualizar ou reinstalar o BodySlide, refaça este passo: os arquivos moram na
+> pasta dele.
 
 ## Configuração
 
