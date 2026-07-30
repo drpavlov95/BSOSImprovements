@@ -7,6 +7,7 @@
 #include "core/ui_thread.h"
 #include "features/outfit_tree.h"
 #include "features/registry.h"
+#include "features/slider_menu.h"
 #include "win32/winfind.h"
 
 namespace {
@@ -31,10 +32,34 @@ volatile LONG g_keyDowns = 0;
 #define BSOS_COUNT_KEY() ((void)0)
 #endif
 
+SliderMenuRefs g_sliderMenu;
+
 bool ActionSelectReference() {
 	bool selected = SelectReference(g_frame);
 	LogF("atalho de reference: %s", selected ? "selecionado" : "projeto sem reference, ignorado");
 	return selected;
+}
+
+// Os dois abaixo so agem em edit mode. Fora dele devolvem false, e a tecla
+// segue para a aplicacao em vez de ser engolida.
+bool ActionExportSliderObj() {
+	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
+		LogF("atalho de export OBJ: fora do edit mode, ignorado");
+		return false;
+	}
+	bool sent = InvokeMenuCommand(g_frame, g_sliderMenu.exportObjItem);
+	LogF("atalho de export OBJ: %s", sent ? "comando enviado" : "falhou");
+	return sent;
+}
+
+bool ActionImportSliderObj() {
+	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
+		LogF("atalho de import OBJ: fora do edit mode, ignorado");
+		return false;
+	}
+	bool sent = InvokeMenuCommand(g_frame, g_sliderMenu.importObjItem);
+	LogF("atalho de import OBJ: %s", sent ? "comando enviado" : "falhou");
+	return sent;
 }
 
 LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
@@ -109,6 +134,16 @@ bool Install(HWND frame) {
 
 	if (cfg.referenceHotkey && cfg.selectReference.IsValid())
 		g_bindings.push_back({cfg.selectReference, "selecionar reference", ActionSelectReference});
+
+	if (cfg.sliderObjHotkeys) {
+		g_sliderMenu = ResolveSliderMenu(AppDir());
+		if (g_sliderMenu.ok) {
+			if (cfg.exportSliderObj.IsValid())
+				g_bindings.push_back({cfg.exportSliderObj, "export slider OBJ", ActionExportSliderObj});
+			if (cfg.importSliderObj.IsValid())
+				g_bindings.push_back({cfg.importSliderObj, "import slider OBJ", ActionImportSliderObj});
+		}
+	}
 
 	if (g_bindings.empty()) {
 		LogF("hotkeys: nenhum atalho configurado");
