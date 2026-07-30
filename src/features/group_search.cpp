@@ -165,7 +165,7 @@ void RefreshList(HWND dlg) {
 	InvalidateRect(list, nullptr, TRUE);
 
 	wchar_t status[160];
-	swprintf_s(status, L"%d de %d grupos \x00b7 %d marcados",
+	swprintf_s(status, L"%d of %d groups \x00b7 %d checked",
 			   row, static_cast<int>(g_allGroups.size()), checkedTotal);
 	SetDlgItemTextW(dlg, kIdCounter, status);
 }
@@ -245,7 +245,7 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 					for (bool on : g_checked)
 						total += on ? 1 : 0;
 					wchar_t status[160];
-					swprintf_s(status, L"%d de %d grupos \x00b7 %d marcados",
+					swprintf_s(status, L"%d of %d groups \x00b7 %d checked",
 							   static_cast<int>(g_visible.size()),
 							   static_cast<int>(g_allGroups.size()), total);
 					SetDlgItemTextW(dlg, kIdCounter, status);
@@ -543,9 +543,9 @@ std::vector<BYTE> BuildGroupsDialogTemplate() {
 	tpl.AddItem(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
 				7, 18, cx - 14, 13, kGroupSearchEdit, kAtomEdit, L"");
 	tpl.AddItem(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-				7, 35, 78, 13, kGroupSearchCheckVisible, kAtomButton, L"Marcar vis\x00edveis");
+				7, 35, 62, 13, kGroupSearchCheckVisible, kAtomButton, L"Check visible");
 	tpl.AddItem(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-				89, 35, 60, 13, kGroupSearchClearAll, kAtomButton, L"Limpar tudo");
+				73, 35, 52, 13, kGroupSearchClearAll, kAtomButton, L"Clear all");
 	tpl.AddCustomClass(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | LVS_REPORT |
 						   LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
 					   7, 52, cx - 14, cy - 78, kGroupSearchList, WC_LISTVIEWW, L"");

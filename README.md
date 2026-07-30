@@ -1,87 +1,87 @@
 # BodySlide and OutfitStudio Improvements
 
-Cinco melhorias de interface para o **BodySlide e Outfit Studio 5.6.3**, entregues
-como um DLL standalone. Nenhum arquivo original é modificado ou redistribuído.
+Five interface improvements for **BodySlide and Outfit Studio 5.6.3**, shipped as a
+standalone DLL. No original file is modified or redistributed.
 
-## O que faz
+## What it does
 
 ### BodySlide
 
-**Busca no diálogo "Choose Groups".** Com centenas de grupos instalados, achar um na
-lista é doloroso. Agora há uma caixa de busca que filtra a lista enquanto você digita,
-mais botões **Marcar visíveis** e **Limpar tudo** e um contador.
+**Search in the "Choose Groups" dialog.** With hundreds of groups installed, finding one
+in that list is painful. There is now a search box that filters the list as you type,
+plus **Check visible** and **Clear all** buttons and a counter.
 
-Grupos marcados que somem por causa do filtro **continuam marcados**. O filtro é só de
-visualização — dá para buscar "3BA", marcar, limpar a busca, procurar "HIMBO", marcar
-mais, e no OK todos vão junto.
+Groups that get hidden by the filter **stay checked**. The filter is display-only, so
+you can search "3BA", check a few, clear the search, look for "HIMBO", check more, and
+hit OK with all of them selected.
 
 ### Outfit Studio
 
-**O reference já vem selecionado.** Ao carregar uma roupa, o Outfit Studio seleciona o
-primeiro mesh da lista. Agora seleciona o shape *reference* — aquele em verde e negrito.
-Vale também quando o projeto é aberto pelo BodySlide ou por duplo clique num `.osp`.
+**The reference comes pre-selected.** When you load an outfit, Outfit Studio selects the
+first mesh in the list. Now it selects the *reference* shape instead — the green one in
+bold. This also works when the project is opened from BodySlide or by double-clicking an
+`.osp` file.
 
-Só age quando não havia seleção anterior, ou seja, numa carga nova. Deletar, renomear ou
-adicionar um shape num projeto já aberto **não** mexe na sua seleção.
+It only acts on a fresh load. Deleting, renaming or adding a shape in an already open
+project **does not** touch your selection.
 
-| Atalho | O que faz |
+| Shortcut | What it does |
 |---|---|
-| `B` | Seleciona o shape reference |
+| `B` | Select the reference shape |
 | `Shift+E` | Export Slider Data ▸ Export OBJ |
 | `Shift+I` | Import Slider Data ▸ Import OBJ |
-| `F` | Redimensionar brush estilo Blender |
-| `K` | Transform (movido do `F`) |
+| `F` | Blender-style brush resize |
+| `K` | Transform (moved off `F`) |
 
-**`Shift+E` e `Shift+I`** só funcionam com algum slider em **Edit mode** — a mesma
-condição que o próprio Outfit Studio usa para habilitar esses itens de menu. Fora do
-edit mode a tecla passa adiante normalmente.
+**`Shift+E` and `Shift+I`** only fire while a slider is in **Edit mode** — the same
+condition Outfit Studio itself uses to enable those menu entries. Outside edit mode the
+key passes through untouched.
 
-**`F` redimensiona o brush** como no Blender: aperta `F`, move o mouse na horizontal
-para crescer ou encolher o círculo, clica com o esquerdo para confirmar. `Esc` ou botão
-direito cancela e devolve o tamanho anterior. Precisa de um brush ativo (teclas `1`–`9`);
-com a ferramenta Select não faz nada.
+**`F` resizes the brush like Blender does:** press `F`, move the mouse horizontally to
+grow or shrink the circle, left click to confirm. `Esc` or right click cancels and
+restores the previous size. The cursor stays pinned while you drag, so the brush changes
+size without moving. Needs an active brush (keys `1`–`9`); with the Select tool it does
+nothing.
 
-Nenhum atalho dispara enquanto o foco está numa caixa de texto — digitar "B" num filtro
-escreve "b".
+No shortcut fires while a text field has focus — typing "B" into a filter types a "b".
 
-## Instalação
+## Installation
 
-**O `msimg32.dll` precisa ficar na mesma pasta que o `BodySlide x64.exe`.** Não é
-preferência de organização: ele é um import estático dos executáveis, e o loader do
-Windows resolve imports estáticos a partir do diretório do próprio `.exe`, antes de
-qualquer camada de virtualização ter chance de opinar.
+**`msimg32.dll` has to sit in the same folder as `BodySlide x64.exe`.** This is not a
+tidiness preference: it is a static import of the executables, and Windows resolves
+static imports from the `.exe`'s own directory, before any virtualisation layer gets a
+say.
 
-**Mod Organizer 2 — não instale como um mod separado.** O VFS do MO2 mapeia mods para o
-`Data` do jogo, nunca para dentro da pasta de outro mod, então um mod separado nunca
-seria carregado. Em vez disso, faça uma das duas:
+**Mod Organizer 2 — do not install this as a separate mod.** MO2's VFS maps mods into
+the game's `Data` folder, never into another mod's folder, so a standalone mod would
+never be loaded. Do one of these instead:
 
-- instale o arquivo **por cima** do mod "BodySlide and Outfit Studio", escolhendo
-  mesclar quando o MO2 perguntar; ou
-- copie os dois arquivos direto para
+- install the archive **over** your "BodySlide and Outfit Studio" mod, choosing to merge
+  when MO2 asks; or
+- copy the two files straight into
   `mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\`.
 
-**Vortex ou instalação manual:** extraia o conteúdo do arquivo dentro da pasta que
-contém o `BodySlide x64.exe`, de forma que o `msimg32.dll` fique ao lado dele.
+**Vortex or manual:** extract the archive contents into the folder containing
+`BodySlide x64.exe`, so that `msimg32.dll` ends up beside it.
 
-Abrir o BodySlide pelo MO2 continua funcionando normalmente — o MO2 lança o executável
-pelo caminho real dele, que é exatamente onde o DLL está.
+Launching BodySlide through MO2 keeps working normally — MO2 starts the executable from
+its real path, which is exactly where the DLL lives.
 
-Requer os executáveis **x64** (`BodySlide x64.exe` e `OutfitStudio x64.exe`). Os de 32
-bits continuam abrindo normalmente, mas sem as melhorias.
+Requires the **x64** executables (`BodySlide x64.exe` and `OutfitStudio x64.exe`). The
+32-bit ones still launch fine, just without the improvements.
 
-Para desinstalar, apague `msimg32.dll` e `BSOSImprovements.ini`.
+To uninstall, delete `msimg32.dll` and `BSOSImprovements.ini`.
 
-> Se você atualizar ou reinstalar o BodySlide, refaça este passo: os arquivos moram na
-> pasta dele.
+> If you update or reinstall BodySlide, redo this step: the files live in its folder.
 
-## Configuração
+## Configuration
 
-Tudo fica em `BSOSImprovements.ini`, ao lado do DLL. Cada feature liga e desliga
-sozinha, e todo atalho é trocável.
+Everything lives in `BSOSImprovements.ini`, next to the DLL. Every feature can be turned
+off individually and every shortcut can be changed.
 
-A seção `[Remap]` liga **qualquer** comando do Outfit Studio a **qualquer** tecla. É
-assim que o `F` fica livre para o brush: o `Transform` é movido para `K`. Se você quiser
-o `R` para o reference, por exemplo:
+The `[Remap]` section binds **any** Outfit Studio command to **any** key. That is how
+`F` is freed up for the brush resize: Transform is moved to `K`. If you would rather have
+`R` select the reference, for example:
 
 ```ini
 [Hotkeys]
@@ -91,67 +91,68 @@ SelectReference=R
 btnRecalcNormals=N
 ```
 
-Os nomes de comando saem de `CalienteTools\BodySlide\res\xrc\OutfitStudio.xrc`: procure
-o texto do menu e olhe o `name=` do `<object>` em volta.
+Command names come from `CalienteTools\BodySlide\res\xrc\OutfitStudio.xrc` — find the
+menu text and read the `name=` of the surrounding `<object>`.
 
-## Compatibilidade
+## Compatibility
 
-- **BodySlide e Outfit Studio 5.6.3.** Nada depende de endereços de memória ou
-  assinaturas de bytes — só de mensagens padrão do Windows — então versões próximas
-  devem funcionar. Se algo não funcionar numa versão nova, o mod se desliga em silêncio
-  em vez de quebrar o programa.
-- **Convive com outros mods que usam `version.dll`**, como os de drape. Este mod usa o
-  slot `msimg32.dll`, deliberadamente diferente.
-- Traduções do BodySlide são suportadas: nada é identificado por texto de interface.
+- **BodySlide and Outfit Studio 5.6.3.** Nothing here depends on memory addresses or
+  byte signatures, only on standard Windows messages, so nearby versions should work. If
+  something cannot be found on a newer build, that piece disables itself silently instead
+  of breaking the program.
+- **Works alongside other mods that use `version.dll`**, such as draping mods. This one
+  deliberately uses the `msimg32.dll` slot instead.
+- BodySlide translations are supported: nothing is identified by interface text.
 
-## Problemas
+## Reporting a problem
 
-Ligue o log e reproduza:
+Turn the log on and reproduce the issue:
 
 ```ini
 [Debug]
 LogFile=1
 ```
 
-Os arquivos saem em `%TEMP%\BSOSImprovements_BodySlide.log` e
+The files land in `%TEMP%\BSOSImprovements_BodySlide.log` and
 `%TEMP%\BSOSImprovements_OutfitStudio.log`.
 
-## Checklist de teste
+## Test checklist
 
-Estado da verificação até aqui. Os itens marcados foram exercitados de forma
-automatizada contra o programa real; os demais precisam de um par de mãos.
+Where verification stands. Checked items were exercised automatically against the real
+programs; the rest need a pair of hands.
 
-- [x] Os dois executáveis x64 abrem com o DLL presente
-- [x] O executável de 32 bits continua abrindo
-- [x] Convivência com o `version.dll` de outro mod no mesmo processo
-- [x] Tecla de reference seleciona o shape correto, com projeto carregado
-- [x] Tecla de reference não faz nada em projeto sem reference
-- [x] Os três atalhos e os remaps registram na inicialização
-- [x] Nome de comando inválido no `[Remap]` é ignorado sem derrubar os outros
-- [x] BodySlide abre com a busca de grupos instalada
-- [ ] Choose Groups: busca filtra, marcados sobrevivem ao filtro, OK aplica
-- [ ] Auto-select do reference numa carga onde o reference não é o primeiro shape
-- [ ] Deletar/renomear shape não rouba a seleção
-- [ ] `Shift+E` / `Shift+I` abrem os diálogos de OBJ em edit mode
-- [ ] `F` redimensiona o brush; clique confirma sem pintar; `Esc` restaura
-- [ ] `K` aciona o Transform
+- [x] Both x64 executables start with the DLL present
+- [x] The 32-bit executable still starts
+- [x] Coexists with another mod's `version.dll` in the same process
+- [x] Reference shortcut selects the right shape, with a project loaded
+- [x] Reference shortcut does nothing in a project without a reference
+- [x] All shortcuts and remaps register at startup
+- [x] An invalid command name in `[Remap]` is ignored without breaking the rest
+- [x] BodySlide starts with the group search installed
+- [x] The replacement dialog creates all of its controls
+- [ ] Choose Groups: search filters, checked items survive the filter, OK applies
+- [ ] Only the new dialog appears — the original must not show up behind it
+- [ ] Reference auto-select on a project whose reference is not the first shape
+- [ ] Deleting/renaming a shape does not steal the selection
+- [ ] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
+- [ ] `F` resizes the brush in place; click confirms without painting; `Esc` restores
+- [ ] `K` triggers Transform
 
-O teste do Choose Groups precisa rodar **pelo Mod Organizer**: os grupos vêm do VFS, e
-fora dele a lista aparece quase vazia.
+The Choose Groups test has to run **through Mod Organizer**: the groups come from the
+VFS, and outside it the list shows up nearly empty.
 
 ## Build
 
-Precisa do Visual Studio 2022 Build Tools com o workload de C++.
+Needs Visual Studio 2022 Build Tools with the C++ workload.
 
 ```
-build.bat            compila dist\msimg32.dll
-tests\build_tests.bat  compila e roda os testes
-package.bat          monta a pasta do mod pronta para zipar
-deploy.bat           copia o DLL para uma instalação de teste
-clean-deploy.bat     remove os arquivos de teste
+build.bat              builds dist\msimg32.dll
+tests\build_tests.bat  builds and runs the tests
+package.bat            builds dist-package\, the contents of the Nexus archive
+install.bat            installs into a BodySlide folder for testing
 ```
 
-## Créditos
+## Credits
 
-BodySlide e Outfit Studio são de **ousnius**. Este mod não inclui nenhum código nem
-arquivo deles; apenas conversa com o programa por mensagens padrão do Windows.
+BodySlide and Outfit Studio are by **ousnius**. This mod contains none of their code or
+files; it only talks to the program through standard Windows messages.
