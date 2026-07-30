@@ -85,9 +85,22 @@ bool HandleBrushResizeMessage(MSG* msg) {
 				BrushResize::Confirm();
 				return false;
 			}
-			// Consome o movimento do usuario e deixa passar so o retorno do
-			// cursor a ancora, para o brush mudar de tamanho sem se mover.
-			return BrushResize::OnMouseMove(msg->pt.x, msg->pt.y);
+
+			BrushResize::OnMouseMove(msg->pt.x);
+
+			// O mouse anda livre, como no Blender -- o que fica parado e o
+			// circulo do brush. Para isso o programa nao pode ver o ponteiro
+			// sair do lugar, senao arrastaria o brush junto.
+			//
+			// Simplesmente engolir o movimento congelaria o desenho, entao no
+			// lugar dele mandamos um movimento na ancora: o programa redesenha
+			// o circulo no tamanho novo, na posicao de sempre. Vai por
+			// SendMessage, direto ao WndProc, entao nao volta para este hook.
+			POINT anchor = BrushResize::Anchor();
+			ScreenToClient(msg->hwnd, &anchor);
+			SendMessageW(msg->hwnd, WM_MOUSEMOVE, msg->wParam,
+						 MAKELPARAM(static_cast<WORD>(anchor.x), static_cast<WORD>(anchor.y)));
+			return true;
 		}
 		case WM_LBUTTONDOWN:
 		case WM_LBUTTONDBLCLK:

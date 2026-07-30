@@ -21,13 +21,16 @@ void Uninstall();
 bool IsActive();
 void Begin(int anchorScreenX, int anchorScreenY);
 
-// Devolve true se a mensagem deve ser consumida.
+// Onde o modo comecou, em coordenadas de tela. O circulo do brush fica aqui
+// enquanto durar o arrasto.
+POINT Anchor();
+
+// Aplica o novo tamanho a partir da distancia horizontal ate a ancora.
 //
-// Enquanto o modo esta ligado o cursor fica preso na ancora: cada movimento e
-// contabilizado e o cursor volta para o lugar. Sem isso o app tambem receberia
-// o movimento e arrastaria o brush pela tela, em vez de so mudar o tamanho --
-// que e como o Blender se comporta.
-bool OnMouseMove(int screenX, int screenY);
+// O mouse se move livremente, como no Blender: o que fica parado e o circulo
+// do brush. Quem impede o brush de andar junto e o chamador, escondendo o
+// movimento do programa.
+void OnMouseMove(int screenX);
 
 void Confirm();
 void Cancel();
