@@ -116,36 +116,6 @@ LogFile=1
 The files land in `%TEMP%\BSOSImprovements_BodySlide.log` and
 `%TEMP%\BSOSImprovements_OutfitStudio.log`.
 
-## Test checklist
-
-Where verification stands. Checked items were exercised automatically against the real
-programs; the rest need a pair of hands.
-
-- [x] Both x64 executables start with the DLL present
-- [x] The 32-bit executable still starts
-- [x] Coexists with another mod's `version.dll` in the same process
-- [x] Reference shortcut selects the right shape, with a project loaded
-- [x] Reference shortcut does nothing in a project without a reference
-- [x] All shortcuts and remaps register at startup
-- [x] An invalid command name in `[Remap]` is ignored without breaking the rest
-- [x] BodySlide starts with the group search installed
-- [x] The replacement dialog creates all of its controls
-- [x] Reference shortcut works in a real multi-shape project
-- [x] `F` resizes the brush in place, visibly, without moving it
-- [x] Reference auto-select on the first project loaded in a session
-- [x] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
-- [x] `K` triggers Transform
-- [x] Choose Groups: search filters, checked items survive the filter, OK applies
-- [x] Only the new dialog appears — the original does not show up behind it
-- [ ] Deleting/renaming a shape does not steal the selection
-
-The last item is the one case never exercised end to end. The auto-select only
-acts when the selected shape is the first in the list, so an edit made while any
-other shape is selected leaves your selection alone by construction.
-
-The Choose Groups test has to run **through Mod Organizer**: the groups come from the
-VFS, and outside it the list shows up nearly empty.
-
 ## Build
 
 Needs Visual Studio 2022 Build Tools with the C++ workload.
