@@ -43,6 +43,30 @@ UINT MenuCommandId(HWND frame, const MenuPath& path) {
 	return bar ? CommandIdAtPath(bar, path) : 0;
 }
 
+bool InvokeMenuCommandId(HWND frame, UINT id) {
+	if (!frame || id == 0)
+		return false;
+	return PostMessageW(frame, WM_COMMAND, MAKEWPARAM(id, 0), 0) != FALSE;
+}
+
+bool BindSliderMenu(HWND frame, SliderMenuRefs& refs) {
+	if (!refs.ok)
+		return false;
+
+	refs.importObjId = MenuCommandId(frame, refs.importObjItem);
+	refs.exportObjId = MenuCommandId(frame, refs.exportObjItem);
+
+	if (refs.importObjId == 0 || refs.exportObjId == 0) {
+		LogF("slider_menu: nao consegui ler os ids na instalacao (import=%u export=%u)",
+			 refs.importObjId, refs.exportObjId);
+		refs.ok = false;
+		return false;
+	}
+
+	LogF("slider_menu: ids guardados -- import=%u export=%u", refs.importObjId, refs.exportObjId);
+	return true;
+}
+
 namespace {
 
 std::string PathToText(const MenuPath& path) {

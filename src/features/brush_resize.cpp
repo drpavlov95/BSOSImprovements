@@ -24,17 +24,23 @@ HWND g_frame = nullptr;
 HWND g_canvas = nullptr; // o wxGLCanvas, fixado na instalacao
 POINT g_anchorClient = {}; // a ancora em coordenadas do canvas
 
-MenuPath g_increase;
-MenuPath g_decrease;
+// Ids lidos uma unica vez na instalacao. Reler o menu a cada passo, alem de
+// caro -- um arrasto de ponta a ponta sao 300 passos -- se mostrou pouco
+// confiavel: a leitura funcionava na inicializacao e devolvia zero depois.
+UINT g_increaseId = 0;
+UINT g_decreaseId = 0;
 
 void ApplySteps(int steps) {
 	if (steps == 0)
 		return;
 
-	const MenuPath& path = (steps > 0) ? g_increase : g_decrease;
+	const UINT id = (steps > 0) ? g_increaseId : g_decreaseId;
+	if (id == 0)
+		return;
+
 	const int count = std::abs(steps);
 	for (int i = 0; i < count; ++i)
-		InvokeMenuCommand(g_frame, path);
+		InvokeMenuCommandId(g_frame, id);
 
 	g_applied += steps;
 }
@@ -84,11 +90,18 @@ bool Install(HWND frame) {
 	g_applied = 0;
 
 	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	g_increase = ResolveMenuPath(xrc.c_str(), "btnIncreaseSize");
-	g_decrease = ResolveMenuPath(xrc.c_str(), "btnDecreaseSize");
+	const MenuPath increasePath = ResolveMenuPath(xrc.c_str(), "btnIncreaseSize");
+	const MenuPath decreasePath = ResolveMenuPath(xrc.c_str(), "btnDecreaseSize");
 
-	if (g_increase.empty() || g_decrease.empty()) {
+	if (increasePath.empty() || decreasePath.empty()) {
 		LogF("brush_resize: nao resolvi btnIncreaseSize/btnDecreaseSize no XRC");
+		return false;
+	}
+
+	g_increaseId = MenuCommandId(frame, increasePath);
+	g_decreaseId = MenuCommandId(frame, decreasePath);
+	if (g_increaseId == 0 || g_decreaseId == 0) {
+		LogF("brush_resize: nao consegui ler os ids (aumentar=%u diminuir=%u)", g_increaseId, g_decreaseId);
 		return false;
 	}
 
@@ -98,9 +111,8 @@ bool Install(HWND frame) {
 	if (!g_canvas)
 		LogF("brush_resize: wxGLCanvas nao encontrado -- o circulo nao vai redesenhar");
 
-	LogF("brush_resize: pronto (canvas=%p, aumentar=%d niveis, diminuir=%d niveis)",
-		 static_cast<void*>(g_canvas), static_cast<int>(g_increase.size()),
-		 static_cast<int>(g_decrease.size()));
+	LogF("brush_resize: pronto (canvas=%p, aumentar=%u diminuir=%u)",
+		 static_cast<void*>(g_canvas), g_increaseId, g_decreaseId);
 	return true;
 }
 
@@ -109,8 +121,8 @@ void Uninstall() {
 	g_applied = 0;
 	g_frame = nullptr;
 	g_canvas = nullptr;
-	g_increase.clear();
-	g_decrease.clear();
+	g_increaseId = 0;
+	g_decreaseId = 0;
 }
 
 bool IsActive() {

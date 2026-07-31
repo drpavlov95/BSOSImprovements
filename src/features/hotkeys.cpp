@@ -35,29 +35,23 @@ bool ActionSelectReference() {
 
 // Os dois de slider so agem em edit mode. Fora dele devolvem false, e a tecla
 // segue para a aplicacao em vez de ser engolida.
-bool RunSliderCommand(const char* label, const MenuPath& item) {
+bool RunSliderCommand(const char* label, UINT commandId) {
 	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
 		LogF("%s: nenhum slider em edit mode (o submenu esta cinza), ignorado", label);
 		return false;
 	}
 
-	const UINT id = MenuCommandId(g_frame, item);
-	if (id == 0) {
-		LogF("%s: nao consegui ler o id do comando no menu vivo", label);
-		return false;
-	}
-
-	const bool sent = InvokeMenuCommand(g_frame, item);
-	LogF("%s: %s comando id=%u", label, sent ? "enviado" : "FALHOU ao enviar", id);
+	const bool sent = InvokeMenuCommandId(g_frame, commandId);
+	LogF("%s: %s comando id=%u", label, sent ? "enviado" : "FALHOU ao enviar", commandId);
 	return sent;
 }
 
 bool ActionExportSliderObj() {
-	return RunSliderCommand("export slider OBJ", g_sliderMenu.exportObjItem);
+	return RunSliderCommand("export slider OBJ", g_sliderMenu.exportObjId);
 }
 
 bool ActionImportSliderObj() {
-	return RunSliderCommand("import slider OBJ", g_sliderMenu.importObjItem);
+	return RunSliderCommand("import slider OBJ", g_sliderMenu.importObjId);
 }
 
 bool ActionBeginBrushResize() {
@@ -217,6 +211,8 @@ bool Install(HWND frame) {
 			// Deixa registrado onde cada comando foi parar e como o menu esta
 			// agora, para um unico teste bastar quando algo nao disparar.
 			LogSliderMenuState(frame, g_sliderMenu);
+		}
+		if (BindSliderMenu(frame, g_sliderMenu)) {
 			AddBinding(cfg.exportSliderObj, "export slider OBJ", ActionExportSliderObj);
 			AddBinding(cfg.importSliderObj, "import slider OBJ", ActionImportSliderObj);
 		}
