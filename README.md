@@ -133,11 +133,11 @@ programs; the rest need a pair of hands.
 - [x] Reference shortcut works in a real multi-shape project
 - [x] `F` resizes the brush in place, visibly, without moving it
 - [x] Reference auto-select on the first project loaded in a session
+- [x] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
+- [x] `K` triggers Transform
 - [ ] Choose Groups: search filters, checked items survive the filter, OK applies
 - [ ] Only the new dialog appears — the original must not show up behind it
 - [ ] Deleting/renaming a shape does not steal the selection
-- [ ] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
-- [ ] `K` triggers Transform
 
 The Choose Groups test has to run **through Mod Organizer**: the groups come from the
 VFS, and outside it the list shows up nearly empty.
