@@ -35,16 +35,29 @@ bool ActionSelectReference() {
 
 // Os dois de slider so agem em edit mode. Fora dele devolvem false, e a tecla
 // segue para a aplicacao em vez de ser engolida.
-bool ActionExportSliderObj() {
-	if (!IsSliderEditModeActive(g_frame, g_sliderMenu))
+bool RunSliderCommand(const char* label, const MenuPath& item) {
+	if (!IsSliderEditModeActive(g_frame, g_sliderMenu)) {
+		LogF("%s: nenhum slider em edit mode (o submenu esta cinza), ignorado", label);
 		return false;
-	return InvokeMenuCommand(g_frame, g_sliderMenu.exportObjItem);
+	}
+
+	const UINT id = MenuCommandId(g_frame, item);
+	if (id == 0) {
+		LogF("%s: nao consegui ler o id do comando no menu vivo", label);
+		return false;
+	}
+
+	const bool sent = InvokeMenuCommand(g_frame, item);
+	LogF("%s: %s comando id=%u", label, sent ? "enviado" : "FALHOU ao enviar", id);
+	return sent;
+}
+
+bool ActionExportSliderObj() {
+	return RunSliderCommand("export slider OBJ", g_sliderMenu.exportObjItem);
 }
 
 bool ActionImportSliderObj() {
-	if (!IsSliderEditModeActive(g_frame, g_sliderMenu))
-		return false;
-	return InvokeMenuCommand(g_frame, g_sliderMenu.importObjItem);
+	return RunSliderCommand("import slider OBJ", g_sliderMenu.importObjItem);
 }
 
 bool ActionBeginBrushResize() {
@@ -86,29 +99,9 @@ bool HandleBrushResizeMessage(MSG* msg) {
 				return false;
 			}
 
+			// O movimento do usuario e engolido para o programa nao arrastar o
+			// brush junto; o redesenho na ancora fica por conta do modo.
 			BrushResize::OnMouseMove(msg->pt.x);
-
-			// O mouse anda livre, como no Blender -- o que fica parado e o
-			// circulo do brush. Para isso o programa nao pode ver o ponteiro
-			// sair do lugar, senao arrastaria o brush junto.
-			//
-			// Simplesmente engolir o movimento congelaria o desenho, entao no
-			// lugar dele mandamos um movimento na ancora: o programa redesenha
-			// o circulo no tamanho novo, na posicao de sempre. Vai por
-			// SendMessage, direto ao WndProc, entao nao volta para este hook.
-			POINT anchor = BrushResize::Anchor();
-			ScreenToClient(msg->hwnd, &anchor);
-			SendMessageW(msg->hwnd, WM_MOUSEMOVE, msg->wParam,
-						 MAKELPARAM(static_cast<WORD>(anchor.x), static_cast<WORD>(anchor.y)));
-
-			// E preciso forcar o repaint. O Outfit Studio so redesenha a cena
-			// no arrasto com botao pressionado: o branch de mouse solto do
-			// OnMouseMove atualiza o cursor e a barra de status, mas nunca
-			// chama RenderOneFrame. E o OnIncBrush, sendo comando de menu, nao
-			// chama nenhum dos dois -- so o caminho de S + roda faz isso.
-			// Sem isto o brush muda de tamanho por dentro e a tela nao mostra.
-			InvalidateRect(msg->hwnd, nullptr, FALSE);
-			UpdateWindow(msg->hwnd);
 			return true;
 		}
 		case WM_LBUTTONDOWN:
@@ -221,6 +214,9 @@ bool Install(HWND frame) {
 	if (cfg.sliderObjHotkeys) {
 		g_sliderMenu = ResolveSliderMenu(AppDir());
 		if (g_sliderMenu.ok) {
+			// Deixa registrado onde cada comando foi parar e como o menu esta
+			// agora, para um unico teste bastar quando algo nao disparar.
+			LogSliderMenuState(frame, g_sliderMenu);
 			AddBinding(cfg.exportSliderObj, "export slider OBJ", ActionExportSliderObj);
 			AddBinding(cfg.importSliderObj, "import slider OBJ", ActionImportSliderObj);
 		}

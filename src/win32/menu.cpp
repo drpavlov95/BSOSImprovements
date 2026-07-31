@@ -70,6 +70,21 @@ UINT CommandIdAtPath(HMENU bar, const std::vector<int>& path) {
 	return container ? CommandIdAt(container, index) : 0;
 }
 
+UINT StateAtPath(HMENU bar, const std::vector<int>& path) {
+	int index = -1;
+	HMENU container = ContainerOf(bar, path, index);
+	if (!container || !InRange(container, index))
+		return 0xFFFFFFFF;
+
+	MENUITEMINFOW info = {};
+	info.cbSize = sizeof(info);
+	info.fMask = MIIM_STATE;
+	if (!GetMenuItemInfoW(container, static_cast<UINT>(index), TRUE, &info))
+		return 0xFFFFFFFF;
+
+	return info.fState;
+}
+
 UINT CommandIdAt(HMENU parent, int index) {
 	if (!InRange(parent, index))
 		return 0;

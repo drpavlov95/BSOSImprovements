@@ -1,5 +1,7 @@
 #include "features/slider_menu.h"
 
+#include <string>
+
 #include "core/log.h"
 #include "win32/menu.h"
 
@@ -32,6 +34,44 @@ bool IsSliderEditModeActive(HWND frame, const SliderMenuRefs& refs) {
 		return false;
 
 	return IsEnabledAtPath(bar, refs.importSubmenu);
+}
+
+UINT MenuCommandId(HWND frame, const MenuPath& path) {
+	if (!frame || path.empty())
+		return 0;
+	HMENU bar = GetMenu(frame);
+	return bar ? CommandIdAtPath(bar, path) : 0;
+}
+
+namespace {
+
+std::string PathToText(const MenuPath& path) {
+	std::string text;
+	for (size_t i = 0; i < path.size(); ++i) {
+		if (i)
+			text += ">";
+		text += std::to_string(path[i]);
+	}
+	return text.empty() ? "(vazio)" : text;
+}
+
+} // namespace
+
+void LogSliderMenuState(HWND frame, const SliderMenuRefs& refs) {
+	HMENU bar = frame ? GetMenu(frame) : nullptr;
+	if (!bar) {
+		LogF("slider_menu: o frame nao tem menubar");
+		return;
+	}
+
+	LogF("slider_menu: import submenu=%s estado=0x%08X | item=%s id=%u",
+		 PathToText(refs.importSubmenu).c_str(), StateAtPath(bar, refs.importSubmenu),
+		 PathToText(refs.importObjItem).c_str(), CommandIdAtPath(bar, refs.importObjItem));
+	LogF("slider_menu: export submenu=%s estado=0x%08X | item=%s id=%u",
+		 PathToText(refs.exportSubmenu).c_str(), StateAtPath(bar, refs.exportSubmenu),
+		 PathToText(refs.exportObjItem).c_str(), CommandIdAtPath(bar, refs.exportObjItem));
+	LogF("slider_menu: MFS_GRAYED=0x%08X, entao estado com esse bit = fora do edit mode",
+		 static_cast<unsigned>(MFS_GRAYED));
 }
 
 bool InvokeMenuCommand(HWND frame, const MenuPath& path) {

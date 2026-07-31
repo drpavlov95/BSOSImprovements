@@ -18,3 +18,6 @@ UINT CommandIdAt(HMENU parent, int index);
 HMENU SubMenuAtPath(HMENU bar, const std::vector<int>& path);
 bool IsEnabledAtPath(HMENU bar, const std::vector<int>& path);
 UINT CommandIdAtPath(HMENU bar, const std::vector<int>& path);
+
+// fState cru do item, para diagnostico. 0xFFFFFFFF se o caminho nao existir.
+UINT StateAtPath(HMENU bar, const std::vector<int>& path);

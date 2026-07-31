@@ -6,6 +6,7 @@
 #include "core/host.h"
 #include "core/log.h"
 #include "features/slider_menu.h"
+#include "win32/winfind.h"
 #include "xrcmap.h"
 
 namespace {
@@ -16,10 +17,13 @@ namespace {
 constexpr int kMaxSteps = 300;
 
 bool g_active = false;
-int g_anchorX = 0;
-int g_anchorY = 0;
+int g_anchorScreenX = 0;
 int g_applied = 0;
+
 HWND g_frame = nullptr;
+HWND g_canvas = nullptr; // o wxGLCanvas, fixado na instalacao
+POINT g_anchorClient = {}; // a ancora em coordenadas do canvas
+
 MenuPath g_increase;
 MenuPath g_decrease;
 
@@ -33,6 +37,28 @@ void ApplySteps(int steps) {
 		InvokeMenuCommand(g_frame, path);
 
 	g_applied += steps;
+}
+
+// Redesenha o circulo no tamanho novo, na posicao congelada.
+//
+// Precisa dos dois passos. O WM_MOUSEMOVE faz o Outfit Studio recalcular o
+// cursor: GLSurface::UpdateCursor termina em ShowCursor(collided), entao sem
+// uma posicao que acerte o mesh o circulo simplesmente some. E o
+// InvalidateRect forca o EVT_PAINT, que chama RenderOneFrame -- o branch de
+// mouse solto do OnMouseMove atualiza o cursor mas nunca redesenha, e o
+// OnIncBrush, sendo comando de menu, nao faz nem um nem outro.
+//
+// A posicao vai sempre em coordenadas do canvas guardadas no inicio, nunca
+// derivadas da janela sob o mouse: durante o arrasto o ponteiro sai do canvas,
+// e converter contra a janela errada mandaria o cursor para fora do mesh.
+void Redraw() {
+	if (!g_canvas || !IsWindow(g_canvas))
+		return;
+
+	SendMessageW(g_canvas, WM_MOUSEMOVE, 0,
+				 MAKELPARAM(static_cast<WORD>(g_anchorClient.x), static_cast<WORD>(g_anchorClient.y)));
+	InvalidateRect(g_canvas, nullptr, FALSE);
+	UpdateWindow(g_canvas);
 }
 
 } // namespace
@@ -65,6 +91,16 @@ bool Install(HWND frame) {
 		LogF("brush_resize: nao resolvi btnIncreaseSize/btnDecreaseSize no XRC");
 		return false;
 	}
+
+	// A view 3D e um wxGLCanvas. Fixar o handle aqui evita depender de qual
+	// janela esta sob o mouse durante o arrasto.
+	g_canvas = FindDescendantByClass(frame, L"wxGLCanvas");
+	if (!g_canvas)
+		LogF("brush_resize: wxGLCanvas nao encontrado -- o circulo nao vai redesenhar");
+
+	LogF("brush_resize: pronto (canvas=%p, aumentar=%d niveis, diminuir=%d niveis)",
+		 static_cast<void*>(g_canvas), static_cast<int>(g_increase.size()),
+		 static_cast<int>(g_decrease.size()));
 	return true;
 }
 
@@ -72,6 +108,7 @@ void Uninstall() {
 	g_active = false;
 	g_applied = 0;
 	g_frame = nullptr;
+	g_canvas = nullptr;
 	g_increase.clear();
 	g_decrease.clear();
 }
@@ -82,21 +119,26 @@ bool IsActive() {
 
 void Begin(int anchorScreenX, int anchorScreenY) {
 	g_active = true;
-	g_anchorX = anchorScreenX;
-	g_anchorY = anchorScreenY;
+	g_anchorScreenX = anchorScreenX;
 	g_applied = 0;
-	LogF("brush resize: entrou no modo (ancora %d,%d)", anchorScreenX, anchorScreenY);
-}
 
-POINT Anchor() {
-	POINT p = {g_anchorX, g_anchorY};
-	return p;
+	// Converte a ancora uma unica vez, enquanto o ponteiro ainda esta onde a
+	// tecla foi apertada.
+	g_anchorClient.x = anchorScreenX;
+	g_anchorClient.y = anchorScreenY;
+	if (g_canvas && IsWindow(g_canvas))
+		ScreenToClient(g_canvas, &g_anchorClient);
+
+	LogF("brush resize: modo ligado (ancora tela %d,%d -> canvas %ld,%ld)",
+		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y);
+	Redraw();
 }
 
 void OnMouseMove(int screenX) {
 	if (!g_active)
 		return;
-	ApplySteps(StepsToApply(screenX - g_anchorX, Cfg().brushResizeSensitivity, g_applied));
+	ApplySteps(StepsToApply(screenX - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied));
+	Redraw();
 }
 
 void Confirm() {
@@ -105,6 +147,7 @@ void Confirm() {
 	g_active = false;
 	LogF("brush resize: confirmado (%+d passos)", g_applied);
 	g_applied = 0;
+	Redraw();
 }
 
 void Cancel() {
@@ -114,6 +157,7 @@ void Cancel() {
 	g_active = false;
 	LogF("brush resize: cancelado, tamanho restaurado");
 	g_applied = 0;
+	Redraw();
 }
 
 } // namespace BrushResize
