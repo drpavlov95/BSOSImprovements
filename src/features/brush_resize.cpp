@@ -1,7 +1,10 @@
 #include "features/brush_resize.h"
 
+#include <commctrl.h>
+
 #include <cmath>
 #include <cstdlib>
+#include <string>
 
 #include "core/host.h"
 #include "core/log.h"
@@ -29,6 +32,28 @@ POINT g_anchorClient = {}; // a ancora em coordenadas do canvas
 // confiavel: a leitura funcionava na inicializacao e devolvia zero depois.
 UINT g_increaseId = 0;
 UINT g_decreaseId = 0;
+
+HWND g_statusBar = nullptr;
+volatile LONG g_paintCount = 0;
+const UINT_PTR kCanvasSubclassId = 0xB507;
+
+// Le o painel 2 da barra de status, onde o OnIncBrush escreve "Rad: %f". E a
+// unica forma, de fora, de saber se o comando de brush surtiu efeito -- separa
+// "o comando nao funciona" de "o desenho nao atualiza".
+std::wstring ReadRadius() {
+	if (!g_statusBar || !IsWindow(g_statusBar))
+		return std::wstring(L"(sem barra de status)");
+
+	wchar_t text[128] = {};
+	SendMessageW(g_statusBar, SB_GETTEXTW, 2, reinterpret_cast<LPARAM>(text));
+	return text[0] ? std::wstring(text) : std::wstring(L"(vazio)");
+}
+
+LRESULT CALLBACK CanvasSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+	if (msg == WM_PAINT)
+		InterlockedIncrement(&g_paintCount);
+	return DefSubclassProc(hwnd, msg, wp, lp);
+}
 
 void ApplySteps(int steps) {
 	if (steps == 0)
@@ -114,9 +139,13 @@ bool Install(HWND frame) {
 	g_canvas = FindDescendantByClass(frame, L"wxGLCanvas");
 	if (!g_canvas)
 		LogF("brush_resize: wxGLCanvas nao encontrado -- o circulo nao vai redesenhar");
+	else
+		SetWindowSubclass(g_canvas, CanvasSubclassProc, kCanvasSubclassId, 0);
 
-	LogF("brush_resize: pronto (canvas=%p, aumentar=%u diminuir=%u)",
-		 static_cast<void*>(g_canvas), g_increaseId, g_decreaseId);
+	g_statusBar = FindDescendantByClass(frame, STATUSCLASSNAMEW);
+
+	LogF("brush_resize: pronto (canvas=%p, statusbar=%p, aumentar=%u diminuir=%u)",
+		 static_cast<void*>(g_canvas), static_cast<void*>(g_statusBar), g_increaseId, g_decreaseId);
 	return true;
 }
 
@@ -153,8 +182,18 @@ void Begin(int anchorScreenX, int anchorScreenY) {
 void OnMouseMove(int screenX) {
 	if (!g_active)
 		return;
-	ApplySteps(StepsToApply(screenX - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied));
+
+	const int steps = StepsToApply(screenX - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied);
+	if (steps == 0)
+		return; // nada a fazer; nao polui o log nem forca repaint atoa
+
+	const LONG paintsBefore = g_paintCount;
+	ApplySteps(steps);
+	const std::wstring radioDepois = ReadRadius();
 	Redraw();
+
+	LogF("brush: %+d passos -> total %+d | status='%ls' | paints %ld->%ld",
+		 steps, g_applied, radioDepois.c_str(), paintsBefore, g_paintCount);
 }
 
 void Confirm() {
