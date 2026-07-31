@@ -157,6 +157,18 @@ package.bat            builds dist-package\, the contents of the Nexus archive
 install.bat            installs into a BodySlide folder for testing
 ```
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+This is an independent add-on. It contains no code or assets from BodySlide and Outfit
+Studio, which is a separate GPL-3.0 project, and it links against nothing of theirs. It
+interacts with those programs only through standard Windows messages, so the two
+licenses do not interact.
+
+`tests/data/OutfitStudio.xrc` is deliberately not committed: it belongs to the BodySlide
+project. Copy it from your own install to run the test that uses it.
+
 ## Credits
 
 BodySlide and Outfit Studio are by **ousnius**. This mod contains none of their code or
