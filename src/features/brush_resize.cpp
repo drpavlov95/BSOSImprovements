@@ -216,8 +216,9 @@ void Begin(int anchorScreenX, int anchorScreenY) {
 		SetCapture(g_canvas);
 	}
 
-	LogF("brush resize: modo ligado (ancora tela %d,%d -> canvas %ld,%ld)",
-		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y);
+	g_paintCount = 0;
+	LogF("brush resize: modo ligado (ancora tela %d,%d -> canvas %ld,%ld, %ls)",
+		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y, ReadRadius().c_str());
 }
 
 void RewriteMouseMove(MSG* msg) {
@@ -225,7 +226,6 @@ void RewriteMouseMove(MSG* msg) {
 		return;
 
 	const int steps = StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied);
-	const LONG paintsBefore = g_paintCount;
 	if (steps != 0)
 		ApplySteps(steps);
 
@@ -249,10 +249,6 @@ void RewriteMouseMove(MSG* msg) {
 	// depender so do caminho interno do app.
 	if (g_canvas && IsWindow(g_canvas))
 		RedrawWindow(g_canvas, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-
-	if (steps != 0)
-		LogF("brush: %+d passos -> total %+d | status='%ls' | paints %ld->%ld",
-			 steps, g_applied, ReadRadius().c_str(), paintsBefore, g_paintCount);
 }
 
 void Confirm() {
@@ -261,7 +257,10 @@ void Confirm() {
 	g_active = false;
 	if (GetCapture() == g_canvas)
 		ReleaseCapture();
-	LogF("brush resize: confirmado (%+d passos, Rad final %ls)", g_applied, ReadRadius().c_str());
+	// Um resumo por arrasto, nao um por movimento: cada LogF abre e fecha o
+	// arquivo, e um arrasto gera centenas de mensagens.
+	LogF("brush resize: confirmado (%+d passos, %ls, %ld repaints)", g_applied,
+		 ReadRadius().c_str(), g_paintCount);
 	g_applied = 0;
 	Redraw();
 }

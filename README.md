@@ -130,12 +130,13 @@ programs; the rest need a pair of hands.
 - [x] An invalid command name in `[Remap]` is ignored without breaking the rest
 - [x] BodySlide starts with the group search installed
 - [x] The replacement dialog creates all of its controls
+- [x] Reference shortcut works in a real multi-shape project
+- [x] `F` resizes the brush in place, visibly, without moving it
 - [ ] Choose Groups: search filters, checked items survive the filter, OK applies
 - [ ] Only the new dialog appears — the original must not show up behind it
 - [ ] Reference auto-select on a project whose reference is not the first shape
 - [ ] Deleting/renaming a shape does not steal the selection
 - [ ] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
-- [ ] `F` resizes the brush in place; click confirms without painting; `Esc` restores
 - [ ] `K` triggers Transform
 
 The Choose Groups test has to run **through Mod Organizer**: the groups come from the
