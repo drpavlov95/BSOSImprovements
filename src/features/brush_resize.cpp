@@ -22,6 +22,7 @@ constexpr int kMaxSteps = 300;
 
 bool g_active = false;
 int g_anchorScreenX = 0;
+int g_anchorScreenY = 0;
 int g_applied = 0;
 
 HWND g_frame = nullptr;
@@ -199,42 +200,47 @@ bool IsActive() {
 void Begin(int anchorScreenX, int anchorScreenY) {
 	g_active = true;
 	g_anchorScreenX = anchorScreenX;
+	g_anchorScreenY = anchorScreenY;
 	g_applied = 0;
 
 	// Converte a ancora uma unica vez, enquanto o ponteiro ainda esta onde a
 	// tecla foi apertada.
 	g_anchorClient.x = anchorScreenX;
 	g_anchorClient.y = anchorScreenY;
-	if (g_canvas && IsWindow(g_canvas))
+	if (g_canvas && IsWindow(g_canvas)) {
 		ScreenToClient(g_canvas, &g_anchorClient);
+		// Captura o mouse para as mensagens continuarem chegando no canvas
+		// mesmo quando o ponteiro sai dele -- e ele sai, num arrasto de
+		// algumas centenas de pixels.
+		SetCapture(g_canvas);
+	}
 
 	LogF("brush resize: modo ligado (ancora tela %d,%d -> canvas %ld,%ld)",
 		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y);
-	Redraw();
 }
 
-void OnMouseMove(int screenX) {
-	if (!g_active)
+void RewriteMouseMove(MSG* msg) {
+	if (!g_active || !msg)
 		return;
 
-	const int steps = StepsToApply(screenX - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied);
-	if (steps == 0)
-		return; // nada a fazer; nao polui o log nem forca repaint atoa
+	ApplySteps(StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied));
 
-	const LONG paintsBefore = g_paintCount;
-	ApplySteps(steps);
-	const std::wstring radioDepois = ReadRadius();
-	Redraw();
-
-	LogF("brush: %+d passos -> total %+d | status='%ls' | paints %ld->%ld",
-		 steps, g_applied, radioDepois.c_str(), paintsBefore, g_paintCount);
+	// Reescreve para a ancora e deixa a mensagem seguir. O app trata o
+	// movimento pelo caminho de sempre -- que e o que redesenha a cena -- mas
+	// com o cursor parado, entao o circulo muda de tamanho sem andar.
+	msg->hwnd = g_canvas ? g_canvas : msg->hwnd;
+	msg->lParam = MAKELPARAM(static_cast<WORD>(g_anchorClient.x), static_cast<WORD>(g_anchorClient.y));
+	msg->pt.x = g_anchorScreenX;
+	msg->pt.y = g_anchorScreenY;
 }
 
 void Confirm() {
 	if (!g_active)
 		return;
 	g_active = false;
-	LogF("brush resize: confirmado (%+d passos)", g_applied);
+	if (GetCapture() == g_canvas)
+		ReleaseCapture();
+	LogF("brush resize: confirmado (%+d passos, Rad final %ls)", g_applied, ReadRadius().c_str());
 	g_applied = 0;
 	Redraw();
 }
@@ -244,6 +250,8 @@ void Cancel() {
 		return;
 	ApplySteps(-g_applied);
 	g_active = false;
+	if (GetCapture() == g_canvas)
+		ReleaseCapture();
 	LogF("brush resize: cancelado, tamanho restaurado");
 	g_applied = 0;
 	Redraw();

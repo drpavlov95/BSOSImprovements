@@ -93,10 +93,12 @@ bool HandleBrushResizeMessage(MSG* msg) {
 				return false;
 			}
 
-			// O movimento do usuario e engolido para o programa nao arrastar o
-			// brush junto; o redesenho na ancora fica por conta do modo.
-			BrushResize::OnMouseMove(msg->pt.x);
-			return true;
+			// Reescreve a coordenada para a ancora e DEIXA a mensagem seguir.
+			// Consumi-la e sintetizar outra no lugar mata o tratamento de
+			// movimento do proprio Outfit Studio, que e quem redesenha a cena
+			// -- foi assim que o circulo parou de mudar de tamanho na tela.
+			BrushResize::RewriteMouseMove(msg);
+			return false;
 		}
 		case WM_LBUTTONDOWN:
 		case WM_LBUTTONDBLCLK:

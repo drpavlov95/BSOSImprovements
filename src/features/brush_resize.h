@@ -21,9 +21,14 @@ bool IsActive();
 // congelado ali ate o fim do arrasto.
 void Begin(int anchorScreenX, int anchorScreenY);
 
-// Aplica o novo tamanho pela distancia horizontal ate a ancora e redesenha.
-// O mouse anda livre, como no Blender; quem fica parado e o circulo.
-void OnMouseMove(int screenX);
+// Aplica o novo tamanho pela distancia horizontal ate a ancora e reescreve a
+// mensagem para o app enxergar o cursor parado na ancora.
+//
+// A mensagem NAO e consumida de proposito. Quem redesenha a cena e o proprio
+// tratamento de movimento do Outfit Studio; engolir a mensagem e sintetizar
+// outra no lugar mata esse caminho, e foi exatamente o que fez o circulo
+// parar de mudar de tamanho na tela.
+void RewriteMouseMove(MSG* msg);
 
 void Confirm();
 void Cancel();
