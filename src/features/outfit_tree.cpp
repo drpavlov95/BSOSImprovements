@@ -81,6 +81,23 @@ HTREEITEM FindReferenceItem(HWND tree) {
 	return FindBoldDescendant(tree);
 }
 
+HTREEITEM FirstShapeItem(HWND tree) {
+	if (!tree)
+		return nullptr;
+	for (HTREEITEM top : ChildItems(tree, TVI_ROOT)) {
+		std::vector<HTREEITEM> shapes = ChildItems(tree, top);
+		if (!shapes.empty())
+			return shapes.front();
+	}
+	return nullptr;
+}
+
+HTREEITEM SelectedItem(HWND tree) {
+	if (!tree)
+		return nullptr;
+	return reinterpret_cast<HTREEITEM>(SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET, 0));
+}
+
 bool SelectReference(HWND frame) {
 	HWND tree = FindOutfitShapesTree(frame);
 	if (!tree)

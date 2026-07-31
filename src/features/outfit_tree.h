@@ -19,3 +19,11 @@ HTREEITEM FindReferenceItem(HWND tree);
 
 // Seleciona o reference no frame dado. false se nao houver arvore ou reference.
 bool SelectReference(HWND frame);
+
+// O primeiro shape da lista -- o que o Outfit Studio seleciona sozinho ao
+// carregar. Com wxTR_HIDE_ROOT os itens de topo sao os nos de outfit, e os
+// shapes sao filhos deles.
+HTREEITEM FirstShapeItem(HWND tree);
+
+// Item com o caret agora.
+HTREEITEM SelectedItem(HWND tree);

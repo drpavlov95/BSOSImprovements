@@ -24,27 +24,36 @@ LRESULT CALLBACK TreeSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 	// wx desenrola. Fazer isso dentro do proprio TVM_EXPAND arriscaria pegar o
 	// LockShapeSelect ainda ativo.
 	if (g_deferredMsg && msg == g_deferredMsg) {
-		bool selected = SelectReference(g_frame);
-		LogF("auto-select do reference: %s", selected ? "selecionado" : "sem reference, mantido o vanilla");
+		// So troca quando o item selecionado e o primeiro shape -- que e o que
+		// o Outfit Studio escolhe sozinho ao carregar. Se o usuario tem outro
+		// shape selecionado, a selecao e dele e nao se mexe.
+		HTREEITEM selected = SelectedItem(hwnd);
+		HTREEITEM first = FirstShapeItem(hwnd);
+		HTREEITEM reference = FindReferenceItem(hwnd);
+
+		if (!reference) {
+			LogF("auto-select: projeto sem reference, mantido o vanilla");
+		} else if (selected != first) {
+			LogF("auto-select: a selecao nao e o primeiro shape, deixando como esta");
+		} else if (selected == reference) {
+			LogF("auto-select: o primeiro shape ja e o reference, nada a fazer");
+		} else {
+			bool ok = SelectReference(g_frame);
+			LogF("auto-select: %s", ok ? "trocado para o reference" : "falhou ao selecionar");
+		}
 		return 0;
 	}
 
 	switch (msg) {
-		case TVM_DELETEITEM:
-			g_tracker.OnDelete();
-			break;
 		case TVM_INSERTITEMA:
 		case TVM_INSERTITEMW:
 			g_tracker.OnInsert();
 			break;
-		case TVM_SELECTITEM:
-			g_tracker.OnSelect();
-			break;
 		case TVM_EXPAND:
 			g_tracker.OnExpand();
-			if (g_tracker.ShouldRetarget()) {
-				// Reset antes de postar: a nossa propria selecao gera
-				// TVM_SELECTITEM e nao pode realimentar o ciclo.
+			if (g_tracker.CycleFinished()) {
+				// Reset antes de postar: a nossa propria selecao gera mais
+				// mensagens e nao pode realimentar o ciclo.
 				g_tracker.Reset();
 				if (g_deferredMsg)
 					PostMessageW(hwnd, g_deferredMsg, 0, 0);
@@ -97,31 +106,19 @@ bool Enabled(const Config& cfg) {
 
 } // namespace
 
-void PopulationTracker::OnDelete() {
-	sawDelete_ = true;
-}
-
 void PopulationTracker::OnInsert() {
 	++insertCount_;
-}
-
-void PopulationTracker::OnSelect() {
-	sawSelect_ = true;
 }
 
 void PopulationTracker::OnExpand() {
 	sawExpand_ = true;
 }
 
-bool PopulationTracker::ShouldRetarget() const {
-	// Precisa do ciclo completo: deletou os filhos antigos, inseriu novos,
-	// expandiu -- e nenhuma selecao foi restaurada no meio.
-	return sawDelete_ && insertCount_ > 0 && !sawSelect_ && sawExpand_;
+bool PopulationTracker::CycleFinished() const {
+	return insertCount_ > 0 && sawExpand_;
 }
 
 void PopulationTracker::Reset() {
-	sawDelete_ = false;
-	sawSelect_ = false;
 	sawExpand_ = false;
 	insertCount_ = 0;
 }
