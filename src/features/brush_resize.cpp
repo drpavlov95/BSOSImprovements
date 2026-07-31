@@ -24,6 +24,7 @@ bool g_active = false;
 int g_anchorScreenX = 0;
 int g_anchorScreenY = 0;
 int g_applied = 0;
+int g_jitter = 0;
 
 HWND g_frame = nullptr;
 HWND g_canvas = nullptr; // o wxGLCanvas, fixado na instalacao
@@ -223,15 +224,35 @@ void RewriteMouseMove(MSG* msg) {
 	if (!g_active || !msg)
 		return;
 
-	ApplySteps(StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied));
+	const int steps = StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied);
+	const LONG paintsBefore = g_paintCount;
+	if (steps != 0)
+		ApplySteps(steps);
 
 	// Reescreve para a ancora e deixa a mensagem seguir. O app trata o
-	// movimento pelo caminho de sempre -- que e o que redesenha a cena -- mas
-	// com o cursor parado, entao o circulo muda de tamanho sem andar.
+	// movimento pelo caminho de sempre, mas com o cursor parado, entao o
+	// circulo muda de tamanho sem andar.
+	//
+	// O deslocamento de 1 pixel alternado existe porque mandar sempre a
+	// coordenada identica fez o app parar de redesenhar. Um pixel na tela e
+	// imperceptivel no circulo, mas garante que cada mensagem seja um
+	// movimento de verdade.
+	g_jitter = 1 - g_jitter;
+	const LONG x = g_anchorClient.x + g_jitter;
+
 	msg->hwnd = g_canvas ? g_canvas : msg->hwnd;
-	msg->lParam = MAKELPARAM(static_cast<WORD>(g_anchorClient.x), static_cast<WORD>(g_anchorClient.y));
-	msg->pt.x = g_anchorScreenX;
+	msg->lParam = MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(g_anchorClient.y));
+	msg->pt.x = g_anchorScreenX + g_jitter;
 	msg->pt.y = g_anchorScreenY;
+
+	// Cinto e suspensorio: forca a pintura tambem por conta propria, para nao
+	// depender so do caminho interno do app.
+	if (g_canvas && IsWindow(g_canvas))
+		RedrawWindow(g_canvas, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+
+	if (steps != 0)
+		LogF("brush: %+d passos -> total %+d | status='%ls' | paints %ld->%ld",
+			 steps, g_applied, ReadRadius().c_str(), paintsBefore, g_paintCount);
 }
 
 void Confirm() {
