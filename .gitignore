@@ -7,3 +7,4 @@ dist/
 *.lib
 .vs/
 dist-package/
+tests/data/

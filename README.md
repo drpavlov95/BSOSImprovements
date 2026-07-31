@@ -135,9 +135,13 @@ programs; the rest need a pair of hands.
 - [x] Reference auto-select on the first project loaded in a session
 - [x] `Shift+E` / `Shift+I` open the OBJ dialogs in edit mode
 - [x] `K` triggers Transform
-- [ ] Choose Groups: search filters, checked items survive the filter, OK applies
-- [ ] Only the new dialog appears — the original must not show up behind it
+- [x] Choose Groups: search filters, checked items survive the filter, OK applies
+- [x] Only the new dialog appears — the original does not show up behind it
 - [ ] Deleting/renaming a shape does not steal the selection
+
+The last item is the one case never exercised end to end. The auto-select only
+acts when the selected shape is the first in the list, so an edit made while any
+other shape is selected leaves your selection alone by construction.
 
 The Choose Groups test has to run **through Mod Organizer**: the groups come from the
 VFS, and outside it the list shows up nearly empty.
