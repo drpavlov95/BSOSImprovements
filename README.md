@@ -52,6 +52,9 @@ tidiness preference: it is a static import of the executables, and Windows resol
 static imports from the `.exe`'s own directory, before any virtualisation layer gets a
 say.
 
+**One copy covers both programs.** `OutfitStudio x64.exe` lives in that same folder and
+has no folder of its own, so there is no second copy to make.
+
 **Mod Organizer 2 — do not install this as a separate mod.** MO2's VFS maps mods into
 the game's `Data` folder, never into another mod's folder, so a standalone mod would
 never be loaded. Do one of these instead:

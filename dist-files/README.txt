@@ -36,6 +36,9 @@ msimg32.dll must sit in the SAME FOLDER as BodySlide x64.exe. It is a static
 import of the executables, so Windows loads it from the .exe's own directory,
 before any virtualisation layer gets a say.
 
+One copy covers both programs: OutfitStudio x64.exe lives in that same folder,
+it has no folder of its own. You do not need a second copy anywhere.
+
   Mod Organizer 2   Do NOT install as a separate mod -- MO2 maps mods into
                     the game's Data folder, never into another mod's folder,
                     so it would never load. Install this archive OVER your
