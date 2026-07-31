@@ -179,6 +179,39 @@ void SyncChecksFromList(HWND dlg) {
 		g_checked[g_visible[row]] = ListView_GetCheckState(list, static_cast<int>(row)) != FALSE;
 }
 
+// Centraliza na janela dona, como o dialogo original do wx faz, e mantem tudo
+// dentro da area util do monitor onde essa janela esta.
+void CenterOnOwner(HWND dlg) {
+	HWND owner = g_frame && IsWindow(g_frame) ? g_frame : GetWindow(dlg, GW_OWNER);
+	if (!owner)
+		return;
+
+	RECT ownerRect = {};
+	RECT dlgRect = {};
+	if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(dlg, &dlgRect))
+		return;
+
+	const int width = dlgRect.right - dlgRect.left;
+	const int height = dlgRect.bottom - dlgRect.top;
+	int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
+	int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2;
+
+	MONITORINFO mi = {};
+	mi.cbSize = sizeof(mi);
+	if (GetMonitorInfoW(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &mi)) {
+		if (x + width > mi.rcWork.right)
+			x = mi.rcWork.right - width;
+		if (y + height > mi.rcWork.bottom)
+			y = mi.rcWork.bottom - height;
+		if (x < mi.rcWork.left)
+			x = mi.rcWork.left;
+		if (y < mi.rcWork.top)
+			y = mi.rcWork.top;
+	}
+
+	SetWindowPos(dlg, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 		case WM_INITDIALOG: {
@@ -192,6 +225,7 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 			col.cx = rc.right - rc.left - GetSystemMetrics(SM_CXVSCROLL) - 4;
 			ListView_InsertColumn(list, 0, &col);
 
+			CenterOnOwner(dlg);
 			RefreshList(dlg);
 			SetFocus(GetDlgItem(dlg, kIdSearch));
 			return FALSE; // ja definimos o foco
@@ -391,11 +425,7 @@ void WriteFilter(HWND frame, const std::wstring& text) {
 	SendMessageW(edit, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(text.c_str()));
 }
 
-void HandleChooseGroupsDialog(HWND dlg) {
-	HWND listBox = FindChoiceListBox(dlg);
-	if (!listBox)
-		return;
-
+void HandleChooseGroupsDialog(HWND dlg, HWND listBox) {
 	g_allGroups = ReadGroupNames(listBox);
 	if (g_allGroups.empty()) {
 		LogF("group_search: o listbox nao devolveu nomes -- deixando o dialogo original");
@@ -419,7 +449,6 @@ void HandleChooseGroupsDialog(HWND dlg) {
 	// modal. Chamar EndDialog nao faz nada, e o dialogo original acaba
 	// aparecendo depois do nosso. WM_CLOSE cai no wxDialog::OnCloseWindow,
 	// que faz EndModal(wxID_CANCEL) -- o caminho de cancelamento de verdade.
-	ShowWindow(dlg, SW_HIDE);
 	PostMessageW(dlg, WM_CLOSE, 0, 0);
 
 	// Nosso dialogo so pode abrir depois que o loop modal do wx terminar,
@@ -454,22 +483,50 @@ LRESULT CALLBACK FrameSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
+const UINT_PTR kPendingDialogId = 0xB508;
+
+// Fica no dialogo do wx desde a criacao, so para pegar o momento em que ele
+// tenta se exibir.
+//
+// Interceptar em HCBT_ACTIVATE era tarde demais: quando a ativacao chega, a
+// janela ja foi mostrada e pintada, e o usuario via o dialogo original piscar
+// antes do nosso. Aqui o proprio pedido de exibicao e desarmado, entao ele
+// nunca chega a aparecer.
+//
+// Este tambem e o primeiro instante em que da para inspecionar o dialogo: os
+// filhos ja existem, o que nao acontece em HCBT_CREATEWND.
+LRESULT CALLBACK PendingDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+								   UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_WINDOWPOSCHANGING && !g_busy) {
+		auto* pos = reinterpret_cast<WINDOWPOS*>(lParam);
+		if (pos && (pos->flags & SWP_SHOWWINDOW)) {
+			HWND listBox = FindChoiceListBox(hwnd);
+			RemoveWindowSubclass(hwnd, PendingDialogProc, id);
+
+			if (listBox) {
+				pos->flags &= ~SWP_SHOWWINDOW; // nao aparece nem por um quadro
+				g_busy = true;
+				HandleChooseGroupsDialog(hwnd, listBox);
+				g_busy = false;
+			}
+		}
+	}
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
 LRESULT CALLBACK CbtProc(int code, WPARAM wParam, LPARAM lParam) {
-	if (code != HCBT_ACTIVATE || g_busy)
+	if (code != HCBT_CREATEWND || g_busy)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
 	HWND candidate = reinterpret_cast<HWND>(wParam);
-	if (!candidate || ClassOf(candidate) != L"#32770")
-		return CallNextHookEx(g_hook, code, wParam, lParam);
-	if (GetWindow(candidate, GW_OWNER) != g_frame)
+	auto* created = reinterpret_cast<CBT_CREATEWNDW*>(lParam);
+	if (!candidate || !created || !created->lpcs)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
-	g_busy = true;
-	HandleChooseGroupsDialog(candidate);
-	g_busy = false;
-
-	// Titulo so no log, nunca no criterio: o BodySlide e traduzido.
-	LogF("group_search: dialogo '%ls' avaliado", TextOf(candidate).c_str());
+	// Todo dialogo do frame entra na espera; quem decide se e o nosso e o
+	// PendingDialogProc, quando os filhos ja existem.
+	if (created->lpcs->hwndParent == g_frame && ClassOf(candidate) == L"#32770")
+		SetWindowSubclass(candidate, PendingDialogProc, kPendingDialogId, 0);
 
 	return CallNextHookEx(g_hook, code, wParam, lParam);
 }
@@ -535,7 +592,10 @@ std::vector<BYTE> BuildGroupsDialogTemplate() {
 	const short cy = 240;
 	const WORD itemCount = 8;
 
-	tpl.BeginDialog(DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU,
+	// Sem DS_CENTER: ele centraliza no monitor, e o dialogo original do wx
+	// centraliza na janela do BodySlide. O posicionamento e feito na mao no
+	// WM_INITDIALOG para bater com o comportamento que o usuario ja conhece.
+	tpl.BeginDialog(DS_MODALFRAME | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU,
 					cx, cy, itemCount, L"Choose Groups");
 
 	tpl.AddItem(WS_CHILD | WS_VISIBLE, 7, 6, cx - 14, 9, 0xFFFF, kAtomStatic,
