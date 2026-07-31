@@ -41,8 +41,17 @@ bool InvokeMenuCommand(HWND frame, const MenuPath& path);
 // Id do comando lido do menu vivo. 0 se o caminho nao existir.
 UINT MenuCommandId(HWND frame, const MenuPath& path);
 
-// Dispara por id ja conhecido, sem caminhar o menu.
+// Dispara por id ja conhecido, sem caminhar o menu. Assincrono: a mensagem vai
+// para a fila. Use para comandos que abrem dialogo, que nao podem bloquear
+// dentro de um hook.
 bool InvokeMenuCommandId(HWND frame, UINT id);
+
+// Versao sincrona: o comando termina antes de retornar.
+//
+// Necessaria quando algo precisa acontecer DEPOIS do efeito do comando -- caso
+// do brush, em que redesenhar logo apos um PostMessage mostraria o tamanho
+// antigo, porque o comando ainda estaria na fila.
+bool SendMenuCommandId(HWND frame, UINT id);
 
 // Despeja no log os caminhos resolvidos, os ids vivos e o estado dos submenus.
 // Serve para um unico teste do usuario responder onde a coisa quebrou.

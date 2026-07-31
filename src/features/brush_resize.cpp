@@ -38,9 +38,13 @@ void ApplySteps(int steps) {
 	if (id == 0)
 		return;
 
+	// Sincrono de proposito. Com PostMessage os comandos ficariam na fila e o
+	// redesenho logo abaixo mostraria o tamanho antigo -- o circulo so mudaria
+	// quando alguma outra coisa provocasse um repaint, tipico do clique de
+	// confirmacao. Aqui o tamanho ja mudou quando Redraw roda.
 	const int count = std::abs(steps);
 	for (int i = 0; i < count; ++i)
-		InvokeMenuCommandId(g_frame, id);
+		SendMenuCommandId(g_frame, id);
 
 	g_applied += steps;
 }

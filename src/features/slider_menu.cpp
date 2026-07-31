@@ -49,6 +49,13 @@ bool InvokeMenuCommandId(HWND frame, UINT id) {
 	return PostMessageW(frame, WM_COMMAND, MAKEWPARAM(id, 0), 0) != FALSE;
 }
 
+bool SendMenuCommandId(HWND frame, UINT id) {
+	if (!frame || id == 0)
+		return false;
+	SendMessageW(frame, WM_COMMAND, MAKEWPARAM(id, 0), 0);
+	return true;
+}
+
 bool BindSliderMenu(HWND frame, SliderMenuRefs& refs) {
 	if (!refs.ok)
 		return false;
