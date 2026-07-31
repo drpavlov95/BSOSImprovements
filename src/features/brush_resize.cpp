@@ -8,6 +8,7 @@
 
 #include "core/host.h"
 #include "core/log.h"
+#include "core/ui_thread.h"
 #include "features/slider_menu.h"
 #include "win32/winfind.h"
 #include "xrcmap.h"
@@ -55,6 +56,14 @@ LRESULT CALLBACK CanvasSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, U
 	return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
+// Precisa rodar NA thread dona da janela: SetWindowSubclass falha em silencio
+// quando chamado de fora dela, e foi por isso que a contagem de pintura da
+// rodada anterior veio zerada e nao pode ser usada como prova.
+void InstallCanvasCounter(void*) {
+	if (g_canvas && !SetWindowSubclass(g_canvas, CanvasSubclassProc, kCanvasSubclassId, 0))
+		LogF("brush_resize: nao consegui subclassar o canvas para contar pintura");
+}
+
 void ApplySteps(int steps) {
 	if (steps == 0)
 		return;
@@ -92,8 +101,12 @@ void Redraw() {
 
 	SendMessageW(g_canvas, WM_MOUSEMOVE, 0,
 				 MAKELPARAM(static_cast<WORD>(g_anchorClient.x), static_cast<WORD>(g_anchorClient.y)));
-	InvalidateRect(g_canvas, nullptr, FALSE);
-	UpdateWindow(g_canvas);
+
+	// RedrawWindow em vez de InvalidateRect + UpdateWindow: e a versao forte,
+	// que ignora janela sem area invalida acumulada e alcanca filhos. O
+	// UpdateWindow so entrega WM_PAINT se a regiao de atualizacao nao estiver
+	// vazia, e havia duvida sobre isso estar acontecendo.
+	RedrawWindow(g_canvas, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 }
 
 } // namespace
@@ -136,11 +149,32 @@ bool Install(HWND frame) {
 
 	// A view 3D e um wxGLCanvas. Fixar o handle aqui evita depender de qual
 	// janela esta sob o mouse durante o arrasto.
-	g_canvas = FindDescendantByClass(frame, L"wxGLCanvas");
+	// Pode haver mais de um wxGLCanvas -- a janela de preview tem o seu. O que
+	// interessa e a view 3D principal: a maior visivel.
+	g_canvas = nullptr;
+	long bestArea = 0;
+	for (int nth = 0; nth < 8; ++nth) {
+		HWND candidate = FindDescendantByClass(frame, L"wxGLCanvas", nth);
+		if (!candidate)
+			break;
+
+		RECT rc = {};
+		GetWindowRect(candidate, &rc);
+		const long area = static_cast<long>(rc.right - rc.left) * (rc.bottom - rc.top);
+		const bool visible = IsWindowVisible(candidate) != FALSE;
+		LogF("brush_resize: canvas #%d hwnd=%p %ldx%ld visivel=%d", nth,
+			 static_cast<void*>(candidate), rc.right - rc.left, rc.bottom - rc.top, visible ? 1 : 0);
+
+		if (visible && area > bestArea) {
+			bestArea = area;
+			g_canvas = candidate;
+		}
+	}
+
 	if (!g_canvas)
-		LogF("brush_resize: wxGLCanvas nao encontrado -- o circulo nao vai redesenhar");
-	else
-		SetWindowSubclass(g_canvas, CanvasSubclassProc, kCanvasSubclassId, 0);
+		LogF("brush_resize: nenhum wxGLCanvas visivel -- o circulo nao vai redesenhar");
+
+	RunOnUiThread(frame, InstallCanvasCounter, nullptr);
 
 	g_statusBar = FindDescendantByClass(frame, STATUSCLASSNAMEW);
 
