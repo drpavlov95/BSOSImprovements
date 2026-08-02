@@ -148,6 +148,12 @@ Hotkey ParseHotkey(const char* spec) {
 	return hk;
 }
 
+bool ReadLogFileFlag(const wchar_t* iniPath) {
+	if (!iniPath || !*iniPath)
+		return false;
+	return GetPrivateProfileIntW(L"Debug", L"LogFile", 0, iniPath) != 0;
+}
+
 Config LoadConfig(const wchar_t* iniPath) {
 	Config c;
 	if (!iniPath || !*iniPath)

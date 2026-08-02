@@ -50,6 +50,11 @@ struct Config {
 // Le [Remap]. Entradas com hotkey invalida sao descartadas.
 std::vector<RemapEntry> ReadRemapSection(const wchar_t* iniPath);
 
+// So a chave [Debug]/LogFile, para o log poder ser ligado ANTES de o resto do
+// INI ser lido. Sem isto, qualquer diagnostico emitido durante o parsing cai no
+// vazio: o log ainda nao existe quando ele acontece.
+bool ReadLogFileFlag(const wchar_t* iniPath);
+
 // Le o INI. Arquivo ausente, secao ausente ou valor malformado caem no default.
 // iniPath PRECISA ser absoluto: a API de perfil do Windows resolve caminhos
 // relativos contra o diretorio do Windows, nao contra o diretorio atual.

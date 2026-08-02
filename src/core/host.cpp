@@ -95,9 +95,15 @@ DWORD WINAPI BootstrapThread(LPVOID) {
 
 	const bool isBodySlide = (g_app == HostApp::BodySlide);
 
-	g_config = LoadConfig((g_appDir + L"BSOSImprovements.ini").c_str());
-	LogInit(g_config.logFile, isBodySlide ? L"BodySlide" : L"OutfitStudio");
+	const std::wstring iniPath = g_appDir + L"BSOSImprovements.ini";
+
+	// O log liga ANTES do parsing. Na outra ordem, qualquer diagnostico emitido
+	// enquanto o INI e lido -- hotkey invalida, secao truncada -- cai no vazio,
+	// porque o log ainda nao existe nesse instante.
+	LogInit(ReadLogFileFlag(iniPath.c_str()), isBodySlide ? L"BodySlide" : L"OutfitStudio");
 	LogF("BSOSImprovements: %s detectado em %ls", isBodySlide ? "BodySlide" : "OutfitStudio", exePath);
+
+	g_config = LoadConfig(iniPath.c_str());
 
 	// A UI sobe bem depois do loader. Espera ate 30s, sem travar nada.
 	for (int attempt = 0; attempt < 300; ++attempt) {
