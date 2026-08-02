@@ -171,9 +171,16 @@ void RefreshList(HWND dlg) {
 		item.iItem = row;
 		item.pszText = const_cast<wchar_t*>(g_allGroups[i].c_str());
 		item.lParam = static_cast<LPARAM>(i);
-		ListView_InsertItem(list, &item);
-		ListView_SetCheckState(list, row, g_checked[i] ? TRUE : FALSE);
 
+		// So conta a linha se ela entrou mesmo. g_visible mapeia linha visivel
+		// para indice original, e o sincronismo de marcacao le a lista por
+		// esse mapa -- se ele ficasse maior que a lista, o sincronismo leria
+		// linhas inexistentes, que devolvem "desmarcado", e apagaria marcacoes
+		// boas.
+		if (ListView_InsertItem(list, &item) < 0)
+			continue;
+
+		ListView_SetCheckState(list, row, g_checked[i] ? TRUE : FALSE);
 		g_visible.push_back(static_cast<int>(i));
 		++row;
 	}
@@ -190,7 +197,13 @@ void RefreshList(HWND dlg) {
 // visiveis sao tocadas.
 void SyncChecksFromList(HWND dlg) {
 	HWND list = GetDlgItem(dlg, kIdList);
-	for (size_t row = 0; row < g_visible.size(); ++row)
+
+	// Nunca ler alem do que a lista tem de fato: linha inexistente devolve
+	// "desmarcado", e isso apagaria a marcacao do grupo correspondente.
+	const size_t rows = static_cast<size_t>(ListView_GetItemCount(list));
+	const size_t limit = rows < g_visible.size() ? rows : g_visible.size();
+
+	for (size_t row = 0; row < limit; ++row)
 		g_checked[g_visible[row]] = ListView_GetCheckState(list, static_cast<int>(row)) != FALSE;
 }
 

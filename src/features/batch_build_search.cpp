@@ -18,8 +18,28 @@ UINT g_deferredLayout = 0;
 const UINT_PTR kDialogSubclassId = 0xB509;
 const UINT_PTR kEditSubclassId = 0xB50A;
 
-// Altura da faixa reservada acima da lista, em pixels.
-const int kBandHeight = 26;
+// Altura da faixa reservada acima da lista.
+//
+// Calculada a partir da fonte do dialogo, nao fixa em pixels: num monitor a
+// 150% ou 200% a fonte cresce e uma faixa de 26 pixels espremeria a caixa de
+// busca a ponto de cortar o texto. O dialogo do Choose Groups nao tem esse
+// problema porque usa unidades de dialogo, que o Windows ja escala.
+int BandHeight(HWND dlg) {
+	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
+	HDC dc = GetDC(dlg);
+	if (!dc)
+		return 26;
+
+	HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+	TEXTMETRICW tm = {};
+	GetTextMetricsW(dc, &tm);
+	if (old)
+		SelectObject(dc, old);
+	ReleaseDC(dlg, dc);
+
+	const int height = static_cast<int>(tm.tmHeight) + 12;
+	return height < 22 ? 22 : height;
+}
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
@@ -102,26 +122,27 @@ void ApplyLayout() {
 	if (EqualRect(&lr, &g_appliedListRect))
 		return;
 
+	const int band = BandHeight(g_dialog);
 	const int width = lr.right - lr.left;
 	const int height = lr.bottom - lr.top;
 	// Antes de a janela ser exibida o retangulo ainda nao e o definitivo; sair
 	// aqui evita posicionar a busca com base num tamanho que vai mudar.
-	if (width <= 20 || height <= kBandHeight * 2)
+	if (width <= 20 || height <= band * 2)
 		return;
 
-	SetWindowPos(g_list, nullptr, lr.left, lr.top + kBandHeight, width, height - kBandHeight,
+	SetWindowPos(g_list, nullptr, lr.left, lr.top + band, width, height - band,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(g_edit, nullptr, lr.left, lr.top + 1, width, kBandHeight - 5,
+	SetWindowPos(g_edit, nullptr, lr.left, lr.top + 1, width, band - 5,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
 
-	SetRect(&g_appliedListRect, lr.left, lr.top + kBandHeight, lr.right, lr.bottom);
+	SetRect(&g_appliedListRect, lr.left, lr.top + band, lr.right, lr.bottom);
 
 	// Uma vez so: se ficar registrando a cada WM_SIZE, arrastar a borda do
 	// dialogo enche o log.
 	static bool logged = false;
 	if (!logged) {
 		logged = true;
-		LogF("batch_build: busca posicionada em (%ld,%ld) %dx%d", lr.left, lr.top + 1, width, kBandHeight - 5);
+		LogF("batch_build: busca posicionada em (%ld,%ld) %dx%d", lr.left, lr.top + 1, width, band - 5);
 	}
 }
 
