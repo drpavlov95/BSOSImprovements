@@ -143,6 +143,7 @@ Config LoadConfig(const wchar_t* iniPath) {
 		return c;
 
 	c.groupSearch = ReadBool(iniPath, L"Features", L"GroupSearch", c.groupSearch);
+	c.batchBuildSearch = ReadBool(iniPath, L"Features", L"BatchBuildSearch", c.batchBuildSearch);
 	c.referenceAutoSelect = ReadBool(iniPath, L"Features", L"ReferenceAutoSelect", c.referenceAutoSelect);
 	c.sliderObjHotkeys = ReadBool(iniPath, L"Features", L"SliderOBJHotkeys", c.sliderObjHotkeys);
 	c.referenceHotkey = ReadBool(iniPath, L"Features", L"ReferenceHotkey", c.referenceHotkey);

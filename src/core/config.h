@@ -24,6 +24,7 @@ struct RemapEntry {
 
 struct Config {
 	bool groupSearch = true;
+	bool batchBuildSearch = true;
 	bool referenceAutoSelect = true;
 	bool sliderObjHotkeys = true;
 	bool referenceHotkey = true;
