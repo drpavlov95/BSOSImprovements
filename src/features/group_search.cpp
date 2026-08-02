@@ -320,6 +320,8 @@ INT_PTR ShowOurDialog(HWND owner) {
 // ListBox e pelo menos dois Buttons. Nunca casar por titulo: o BodySlide traz
 // traducoes para mais de 30 idiomas. E o unico wxMultiChoiceDialog do processo
 // do BodySlide, entao a estrutura basta.
+std::wstring ListBoxItemText(HWND listBox, int index);
+
 HWND ChooseGroupsListBoxImpl(HWND dlg) {
 	HWND listBox = nullptr;
 	int listBoxes = 0;
@@ -341,20 +343,12 @@ HWND ChooseGroupsListBoxImpl(HWND dlg) {
 		}
 	}
 
-	// O Choose Groups e um wxMultiChoiceDialog montado pelo proprio wx: um
-	// texto, uma lista de marcacao e os botoes OK e Cancel. Nada mais.
-	//
-	// A contagem precisa ser exata. "uma lista e pelo menos dois botoes"
-	// tambem descreve o dialogo de Batch Build, e o mod acabou sequestrando
-	// ele -- o usuario apertava Ctrl+Batch Build e reabria a busca de grupos.
-	//
-	// Entre todos os dialogos do BodySlide que tem lista, so o Choose Groups
-	// tem exatamente 1 lista, exatamente 2 botoes e nenhum campo de texto ou
-	// combo: BatchBuild tem 4 botoes e um campo de texto, Settings tem tres
-	// combos, SliderDataImport tem duas listas, SavePreset tem um campo de
-	// texto.
-	if (listBoxes != 1 || buttons != 2 || edits != 0 || combos != 0 || !listBox)
+	// Pre-filtro barato: uma unica lista de marcacao (wxCheckListBox e
+	// owner-drawn no MSW) e ao menos dois botoes.
+	if (listBoxes != 1 || buttons < 2 || !listBox)
 		return nullptr;
+	(void)edits;
+	(void)combos;
 
 	// Exatamente um listbox e dois botoes tambem descreve varios outros
 	// dialogos. O que distingue um wxCheckListBox e ele ser owner-drawn: o wx
@@ -364,11 +358,37 @@ HWND ChooseGroupsListBoxImpl(HWND dlg) {
 	if ((style & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) == 0)
 		return nullptr;
 
-	// E precisa ter conteudo para ler.
-	if (SendMessageW(listBox, LB_GETCOUNT, 0, 0) <= 0)
+	const int count = static_cast<int>(SendMessageW(listBox, LB_GETCOUNT, 0, 0));
+	if (count <= 0)
+		return nullptr;
+
+	// O criterio decisivo e o CONTEUDO, nao a estrutura.
+	//
+	// Estrutura nao separa: dlgBatchBuild tem exatamente uma lista de marcacao
+	// e dois botoes, igual ao Choose Groups. Tentar distinguir por contagem de
+	// controles ja falhou uma vez -- BatchBuild.xrc declara dois dialogos, e
+	// contar o arquivo inteiro somava os controles dos dois.
+	//
+	// O que separa: o OnChooseGroups monta a lista de grupos e acrescenta
+	// "Unassigned" depois do loop (BodySlideApp.cpp:3571), sem passar por _().
+	// Ou seja, o ultimo item e sempre exatamente essa palavra, em qualquer
+	// idioma. Uma lista de outfits nao termina assim.
+	std::wstring lastItem = ListBoxItemText(listBox, count - 1);
+	if (lastItem != L"Unassigned")
 		return nullptr;
 
 	return listBox;
+}
+
+std::wstring ListBoxItemText(HWND listBox, int index) {
+	const int len = static_cast<int>(SendMessageW(listBox, LB_GETTEXTLEN, index, 0));
+	if (len <= 0 || len > 4096)
+		return std::wstring();
+
+	std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+	int written = static_cast<int>(SendMessageW(listBox, LB_GETTEXT, index, reinterpret_cast<LPARAM>(text.data())));
+	text.resize(written > 0 ? static_cast<size_t>(written) : 0);
+	return text;
 }
 
 std::vector<std::wstring> ReadGroupNames(HWND listBox) {
