@@ -1,5 +1,7 @@
 #include "core/config.h"
 
+#include "core/log.h"
+
 #include <cctype>
 #include <string>
 #include <vector>
@@ -65,8 +67,17 @@ std::vector<RemapEntry> ReadRemapSection(const wchar_t* iniPath) {
 	std::vector<wchar_t> buffer(8192);
 	DWORD used = GetPrivateProfileSectionW(L"Remap", buffer.data(),
 										   static_cast<DWORD>(buffer.size()), iniPath);
-	if (used == 0 || used >= buffer.size() - 2)
+	if (used == 0)
 		return entries;
+
+	// A API sinaliza truncamento devolvendo o tamanho do buffer menos dois.
+	// Descartar tudo calado deixaria o usuario com os remaps sumindo sem
+	// explicacao.
+	if (used >= buffer.size() - 2) {
+		LogF("config: a secao [Remap] passou de %d caracteres e foi ignorada",
+			 static_cast<int>(buffer.size()));
+		return entries;
+	}
 
 	for (const wchar_t* line = buffer.data(); *line; line += wcslen(line) + 1) {
 		const wchar_t* eq = wcschr(line, L'=');

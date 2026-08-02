@@ -129,14 +129,24 @@ void ApplyLayout() {
 // OK -- ou seja, fecharia o dialogo e comecaria o build. Aqui ele vira "proximo
 // resultado".
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
-	if (msg == WM_GETDLGCODE)
-		return DLGC_WANTALLKEYS | DefSubclassProc(hwnd, msg, wParam, lParam);
+	if (msg == WM_GETDLGCODE) {
+		LRESULT code = DefSubclassProc(hwnd, msg, wParam, lParam);
+
+		// So o Enter, e so quando ele realmente chega. DLGC_WANTALLKEYS pediria
+		// TODAS as teclas: o Tab deixaria de sair da caixa e o Esc deixaria de
+		// fechar o dialogo, prendendo o usuario na busca.
+		auto* incoming = reinterpret_cast<MSG*>(lParam);
+		if (incoming && incoming->message == WM_KEYDOWN && incoming->wParam == VK_RETURN)
+			code |= DLGC_WANTMESSAGE;
+
+		return code;
+	}
 
 	if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
 		JumpToMatch(true);
 		return 0;
 	}
-	// Esc segue o caminho normal e fecha o dialogo, como o usuario espera.
+	// Esc e Tab seguem o caminho normal do dialogo.
 	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 

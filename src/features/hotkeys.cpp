@@ -134,6 +134,12 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
+	// Durante o arrasto de redimensionar, o modo e exclusivo: so as teclas que
+	// o encerram valem. Sem isto, apertar B no meio do arrasto trocaria o shape
+	// selecionado enquanto o brush ainda esta sendo ajustado.
+	if (BrushResize::IsActive())
+		return CallNextHookEx(g_hook, code, wParam, lParam);
+
 	const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 	const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 	const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
