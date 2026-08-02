@@ -1,7 +1,7 @@
 BodySlide and OutfitStudio Improvements
 =======================================
 
-Five interface improvements for BodySlide and Outfit Studio 5.6.3.
+Six interface improvements for BodySlide and Outfit Studio.
 Nothing in the original install is modified or replaced.
 
 
@@ -13,6 +13,12 @@ BodySlide
   with "Check visible" and "Clear all" buttons. Groups hidden by the filter
   stay checked, so you can search, check, search again, and hit OK with all
   of them selected.
+
+  A search box in the "Batch Build" dialog. This one jumps to the first match
+  as you type instead of filtering -- Enter cycles through the rest. It jumps
+  rather than hides because Batch Build reads what to build from the list
+  itself, so hiding rows would change the result. Your checkboxes are left
+  exactly as you set them.
 
 Outfit Studio
   Loading a project selects the reference shape (green, bold) instead of the
@@ -59,9 +65,9 @@ Requires a 64-bit executable. On 5.6 and 5.7 that is the one with the x64
 suffix; the 32-bit build still starts, just without the improvements. 5.8.0
 dropped the suffix and the plain name is the 64-bit build.
 
-Developed and verified against 5.6.3. Nothing depends on memory addresses or
-byte signatures, so newer versions should work, and anything that cannot be
-found disables itself rather than breaking the program.
+Verified against 5.8.2. Nothing depends on memory addresses or byte
+signatures, so newer versions should work, and anything that cannot be found
+disables itself rather than breaking the program.
 
 To uninstall, delete msimg32.dll and BSOSImprovements.ini.
 If you update BodySlide, redo this: the files live in its folder.
@@ -89,9 +95,15 @@ Command names come from CalienteTools\BodySlide\res\xrc\OutfitStudio.xrc.
 COMPATIBILITY
 -------------
 
-Built for 5.6.3, but nothing depends on memory addresses or byte signatures --
-only on standard Windows messages -- so nearby versions should work. Anything
-that cannot be found disables itself instead of breaking the program.
+Verified against 5.8.2, developed originally against 5.6.3. Nothing depends on
+memory addresses or byte signatures -- only on standard Windows messages -- so
+other versions should work. Anything that cannot be found disables itself
+instead of breaking the program.
+
+Dark mode, added in 5.8.2, is not followed by the two dialogs this mod draws
+itself: the Choose Groups replacement and the Batch Build search box use
+standard Windows colours. They work, they just look light against a dark
+BodySlide.
 
 Works alongside mods that use version.dll, such as draping mods; this one uses
 the msimg32.dll slot. BodySlide translations are supported: nothing is matched

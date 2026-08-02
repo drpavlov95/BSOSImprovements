@@ -7,10 +7,14 @@ dist/
 *.lib
 .vs/
 dist-package/
+
+# Fixture do proprio BodySlide, que e GPL-3.0: nao redistribuido aqui. O teste
+# que usa ele se declara pulado se o arquivo nao estiver presente.
 tests/data/
+
+# Scripts de empacotamento e deploy: apontam para caminhos desta maquina.
 install.bat
 package.bat
 deploy.bat
 clean-deploy.bat
 nexus-description.bbcode
-tests/

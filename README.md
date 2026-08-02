@@ -1,7 +1,7 @@
 # BodySlide and OutfitStudio Improvements
 
-Five interface improvements for **BodySlide and Outfit Studio 5.6.3**, shipped as a
-standalone DLL. No original file is modified or redistributed.
+Six interface improvements for **BodySlide and Outfit Studio**, shipped as a standalone
+DLL. No original file is modified or redistributed.
 
 ## What it does
 
@@ -14,6 +14,14 @@ plus **Check visible** and **Clear all** buttons and a counter.
 Groups that get hidden by the filter **stay checked**. The filter is display-only, so
 you can search "3BA", check a few, clear the search, look for "HIMBO", check more, and
 hit OK with all of them selected.
+
+**Search in the "Batch Build" dialog.** A search box above the outfit list jumps to the
+first match as you type; `Enter` cycles through the rest, wrapping around at the end.
+
+This one *jumps* rather than filtering, and that is deliberate: Batch Build reads which
+outfits to build straight from the list control, so hiding rows would change what gets
+built. Nothing is added or removed — only scrolled to — so your checkboxes are exactly
+what you set them to.
 
 ### Outfit Studio
 
@@ -104,10 +112,14 @@ menu text and read the `name=` of the surrounding `<object>`.
 
 ## Compatibility
 
-- **Developed and verified against 5.6.3.** Nothing here depends on memory addresses or
-  byte signatures, only on standard Windows messages, so newer versions should work —
-  including 5.8.0, which renamed the executables. If something cannot be found on a newer
-  build, that piece disables itself silently instead of breaking the program.
+- **Verified against 5.8.2**, and developed originally against 5.6.3. Nothing here
+  depends on memory addresses or byte signatures, only on standard Windows messages, so
+  newer versions should keep working — including 5.8.0, which renamed the executables. If
+  something cannot be found on a newer build, that piece disables itself silently instead
+  of breaking the program.
+- **Dark mode (added in 5.8.2) is not followed by the two dialogs this mod draws itself**
+  — the Choose Groups replacement and the Batch Build search box use standard Windows
+  colours. Everything works; it just looks light against a dark BodySlide.
 - **Works alongside other mods that use `version.dll`**, such as draping mods. This one
   deliberately uses the `msimg32.dll` slot instead.
 - BodySlide translations are supported: nothing is identified by interface text.
@@ -128,12 +140,18 @@ The files land in `%TEMP%\BSOSImprovements_BodySlide.log` and
 
 Needs Visual Studio 2022 Build Tools with the C++ workload.
 
-```
+```text
 build.bat              builds dist\msimg32.dll
 tests\build_tests.bat  builds and runs the tests
-package.bat            builds dist-package\, the contents of the Nexus archive
-install.bat            installs into a BodySlide folder for testing
 ```
+
+Packaging and install scripts are not in the repository — they point at local paths.
+
+The tests run on plain Windows: they build real menus, trees and dialogs with the Win32
+API and assert against them, so they cover the parts that actually break — menu path
+resolution, dialog identification, hotkey matching. One test wants
+`tests\data\OutfitStudio.xrc`, which belongs to BodySlide and is not redistributed here;
+copy it from your own install to run it, or it reports itself as skipped.
 
 ## License
 
@@ -144,8 +162,8 @@ Studio, which is a separate GPL-3.0 project, and it links against nothing of the
 interacts with those programs only through standard Windows messages, so the two
 licenses do not interact.
 
-`tests/data/OutfitStudio.xrc` is deliberately not committed: it belongs to the BodySlide
-project. Copy it from your own install to run the test that uses it.
+No file belonging to the BodySlide project is committed here — the mod reads the `.xrc`
+resources from your own installation at runtime.
 
 ## Credits
 
