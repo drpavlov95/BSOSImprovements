@@ -8,3 +8,9 @@ dist/
 .vs/
 dist-package/
 tests/data/
+install.bat
+package.bat
+deploy.bat
+clean-deploy.bat
+nexus-description.bbcode
+tests/

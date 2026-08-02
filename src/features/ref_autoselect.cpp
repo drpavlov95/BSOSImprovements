@@ -49,16 +49,22 @@ LRESULT CALLBACK TreeSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 		case TVM_INSERTITEMW:
 			g_tracker.OnInsert();
 			break;
-		case TVM_EXPAND:
+		case TVM_EXPAND: {
 			g_tracker.OnExpand();
-			if (g_tracker.CycleFinished()) {
-				// Reset antes de postar: a nossa propria selecao gera mais
-				// mensagens e nao pode realimentar o ciclo.
-				g_tracker.Reset();
-				if (g_deferredMsg)
-					PostMessageW(hwnd, g_deferredMsg, 0, 0);
-			}
+			const bool finished = g_tracker.CycleFinished();
+
+			// Zera SEMPRE no expand, tenha disparado ou nao. Sem isso as
+			// insercoes de qualquer operacao ficam acumuladas, e um expand
+			// avulso mais tarde -- o usuario abrindo um no na arvore --
+			// fecharia um "ciclo" que nunca existiu. Zerando aqui, um ciclo
+			// so vale se as insercoes vierem imediatamente antes do expand,
+			// que e como a repopulacao de fato acontece.
+			g_tracker.Reset();
+
+			if (finished && g_deferredMsg)
+				PostMessageW(hwnd, g_deferredMsg, 0, 0);
 			break;
+		}
 		default:
 			break;
 	}

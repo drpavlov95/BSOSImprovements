@@ -52,9 +52,19 @@ std::wstring ReadRadius() {
 	return text[0] ? std::wstring(text) : std::wstring(L"(vazio)");
 }
 
+void ExitBecauseCaptureLost();
+
 LRESULT CALLBACK CanvasSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
 	if (msg == WM_PAINT)
 		InterlockedIncrement(&g_paintCount);
+
+	// Perder a captura sem passar por Confirm/Cancel deixaria o modo ligado
+	// para sempre, e a partir dai todo movimento do mouse seria reescrito para
+	// a ancora -- o brush congelaria de vez. WM_CAPTURECHANGED e enviada, nao
+	// postada, entao o hook de mensagens nao a enxerga; so a subclasse.
+	if (msg == WM_CAPTURECHANGED)
+		ExitBecauseCaptureLost();
+
 	return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
@@ -97,6 +107,16 @@ void ApplySteps(int steps) {
 // A posicao vai sempre em coordenadas do canvas guardadas no inicio, nunca
 // derivadas da janela sob o mouse: durante o arrasto o ponteiro sai do canvas,
 // e converter contra a janela errada mandaria o cursor para fora do mesh.
+// Sai do modo mantendo o tamanho ja aplicado. Nao restaura, porque perder a
+// captura nao e o mesmo que o usuario cancelar.
+void ExitBecauseCaptureLost() {
+	if (!g_active)
+		return;
+	g_active = false;
+	LogF("brush resize: captura perdida, modo encerrado (%+d passos mantidos)", g_applied);
+	g_applied = 0;
+}
+
 void Redraw() {
 	if (!g_canvas || !IsWindow(g_canvas))
 		return;
@@ -186,6 +206,10 @@ bool Install(HWND frame) {
 }
 
 void Uninstall() {
+	if (g_active && GetCapture() == g_canvas)
+		ReleaseCapture();
+	if (g_canvas && IsWindow(g_canvas))
+		RemoveWindowSubclass(g_canvas, CanvasSubclassProc, kCanvasSubclassId);
 	g_active = false;
 	g_applied = 0;
 	g_frame = nullptr;
