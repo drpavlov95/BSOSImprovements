@@ -47,13 +47,17 @@ No shortcut fires while a text field has focus — typing "B" into a filter type
 
 ## Installation
 
-**`msimg32.dll` has to sit in the same folder as `BodySlide x64.exe`.** This is not a
-tidiness preference: it is a static import of the executables, and Windows resolves
+**`msimg32.dll` has to sit in the same folder as the BodySlide executable.** This is not
+a tidiness preference: it is a static import of the executables, and Windows resolves
 static imports from the `.exe`'s own directory, before any virtualisation layer gets a
 say.
 
-**One copy covers both programs.** `OutfitStudio x64.exe` lives in that same folder and
-has no folder of its own, so there is no second copy to make.
+That folder is `CalienteTools\BodySlide\`. On 5.6 and 5.7 the executable there is
+`BodySlide x64.exe`; **5.8.0 dropped the suffix**, so it is just `BodySlide.exe`. Either
+way, the DLL goes right next to it — host detection matches the name, not the suffix.
+
+**One copy covers both programs.** The Outfit Studio executable lives in that same folder
+and has no folder of its own, so there is no second copy to make.
 
 **Mod Organizer 2 — do not install this as a separate mod.** MO2's VFS maps mods into
 the game's `Data` folder, never into another mod's folder, so a standalone mod would
@@ -70,8 +74,9 @@ never be loaded. Do one of these instead:
 Launching BodySlide through MO2 keeps working normally — MO2 starts the executable from
 its real path, which is exactly where the DLL lives.
 
-Requires the **x64** executables (`BodySlide x64.exe` and `OutfitStudio x64.exe`). The
-32-bit ones still launch fine, just without the improvements.
+Requires a **64-bit** executable. On 5.6 and 5.7 that is the one with the `x64` suffix;
+the 32-bit build still launches fine, just without the improvements. 5.8.0 dropped the
+suffix, so there the plain name is already the 64-bit build.
 
 To uninstall, delete `msimg32.dll` and `BSOSImprovements.ini`.
 
@@ -99,10 +104,10 @@ menu text and read the `name=` of the surrounding `<object>`.
 
 ## Compatibility
 
-- **BodySlide and Outfit Studio 5.6.3.** Nothing here depends on memory addresses or
-  byte signatures, only on standard Windows messages, so nearby versions should work. If
-  something cannot be found on a newer build, that piece disables itself silently instead
-  of breaking the program.
+- **Developed and verified against 5.6.3.** Nothing here depends on memory addresses or
+  byte signatures, only on standard Windows messages, so newer versions should work —
+  including 5.8.0, which renamed the executables. If something cannot be found on a newer
+  build, that piece disables itself silently instead of breaking the program.
 - **Works alongside other mods that use `version.dll`**, such as draping mods. This one
   deliberately uses the `msimg32.dll` slot instead.
 - BodySlide translations are supported: nothing is identified by interface text.

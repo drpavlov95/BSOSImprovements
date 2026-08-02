@@ -32,12 +32,16 @@ Outfit Studio
 INSTALL
 -------
 
-msimg32.dll must sit in the SAME FOLDER as BodySlide x64.exe. It is a static
-import of the executables, so Windows loads it from the .exe's own directory,
-before any virtualisation layer gets a say.
+msimg32.dll must sit in the SAME FOLDER as the BodySlide executable. It is a
+static import of the executables, so Windows loads it from the .exe's own
+directory, before any virtualisation layer gets a say.
 
-One copy covers both programs: OutfitStudio x64.exe lives in that same folder,
-it has no folder of its own. You do not need a second copy anywhere.
+That folder is CalienteTools\BodySlide\. On 5.6 and 5.7 the executable there is
+"BodySlide x64.exe"; 5.8.0 dropped the suffix, so it is just "BodySlide.exe".
+Either way, the DLL goes right next to it.
+
+One copy covers both programs: the Outfit Studio executable lives in that same
+folder and has no folder of its own. You do not need a second copy anywhere.
 
   Mod Organizer 2   Do NOT install as a separate mod -- MO2 maps mods into
                     the game's Data folder, never into another mod's folder,
@@ -46,12 +50,18 @@ it has no folder of its own. You do not need a second copy anywhere.
                     or copy the two files into
                     mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\
 
-  Vortex / manual   Extract into the folder containing BodySlide x64.exe.
+  Vortex / manual   Extract into the folder containing the BodySlide
+                    executable.
 
 Launching BodySlide through MO2 keeps working normally.
 
-Requires the x64 executables. The 32-bit ones still start, just without the
-improvements.
+Requires a 64-bit executable. On 5.6 and 5.7 that is the one with the x64
+suffix; the 32-bit build still starts, just without the improvements. 5.8.0
+dropped the suffix and the plain name is the 64-bit build.
+
+Developed and verified against 5.6.3. Nothing depends on memory addresses or
+byte signatures, so newer versions should work, and anything that cannot be
+found disables itself rather than breaking the program.
 
 To uninstall, delete msimg32.dll and BSOSImprovements.ini.
 If you update BodySlide, redo this: the files live in its folder.

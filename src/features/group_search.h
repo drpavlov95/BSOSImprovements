@@ -42,3 +42,9 @@ enum GroupSearchControlId {
 // so se manifesta na hora de criar o dialogo, e isso precisa falhar no CI, nao
 // na mao do usuario.
 std::vector<BYTE> BuildGroupsDialogTemplate();
+
+// Devolve a lista do dialogo se ele for o Choose Groups, ou nullptr.
+//
+// Exposto para teste porque errar aqui significa sequestrar o dialogo errado
+// do BodySlide -- ja aconteceu com o de Batch Build.
+HWND FindChooseGroupsListBox(HWND dlg);

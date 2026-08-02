@@ -307,10 +307,12 @@ INT_PTR ShowOurDialog(HWND owner) {
 // ListBox e pelo menos dois Buttons. Nunca casar por titulo: o BodySlide traz
 // traducoes para mais de 30 idiomas. E o unico wxMultiChoiceDialog do processo
 // do BodySlide, entao a estrutura basta.
-HWND FindChoiceListBox(HWND dlg) {
+HWND ChooseGroupsListBoxImpl(HWND dlg) {
 	HWND listBox = nullptr;
 	int listBoxes = 0;
 	int buttons = 0;
+	int edits = 0;
+	int combos = 0;
 
 	for (HWND child : ChildrenOf(dlg)) {
 		std::wstring cls = ClassOf(child);
@@ -319,10 +321,26 @@ HWND FindChoiceListBox(HWND dlg) {
 			listBox = child;
 		} else if (_wcsicmp(cls.c_str(), L"Button") == 0) {
 			++buttons;
+		} else if (_wcsicmp(cls.c_str(), L"Edit") == 0 || _wcsnicmp(cls.c_str(), L"RichEdit", 8) == 0) {
+			++edits;
+		} else if (_wcsicmp(cls.c_str(), L"ComboBox") == 0) {
+			++combos;
 		}
 	}
 
-	if (listBoxes != 1 || buttons < 2 || !listBox)
+	// O Choose Groups e um wxMultiChoiceDialog montado pelo proprio wx: um
+	// texto, uma lista de marcacao e os botoes OK e Cancel. Nada mais.
+	//
+	// A contagem precisa ser exata. "uma lista e pelo menos dois botoes"
+	// tambem descreve o dialogo de Batch Build, e o mod acabou sequestrando
+	// ele -- o usuario apertava Ctrl+Batch Build e reabria a busca de grupos.
+	//
+	// Entre todos os dialogos do BodySlide que tem lista, so o Choose Groups
+	// tem exatamente 1 lista, exatamente 2 botoes e nenhum campo de texto ou
+	// combo: BatchBuild tem 4 botoes e um campo de texto, Settings tem tres
+	// combos, SliderDataImport tem duas listas, SavePreset tem um campo de
+	// texto.
+	if (listBoxes != 1 || buttons != 2 || edits != 0 || combos != 0 || !listBox)
 		return nullptr;
 
 	// Exatamente um listbox e dois botoes tambem descreve varios outros
@@ -500,7 +518,7 @@ LRESULT CALLBACK PendingDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 	if (msg == WM_WINDOWPOSCHANGING && !g_busy) {
 		auto* pos = reinterpret_cast<WINDOWPOS*>(lParam);
 		if (pos && (pos->flags & SWP_SHOWWINDOW)) {
-			HWND listBox = FindChoiceListBox(hwnd);
+			HWND listBox = ChooseGroupsListBoxImpl(hwnd);
 			RemoveWindowSubclass(hwnd, PendingDialogProc, id);
 
 			if (listBox) {
@@ -584,6 +602,10 @@ bool MatchesFilter(const std::wstring& name, const std::wstring& query) {
 	if (query.empty())
 		return true;
 	return LowerWide(name).find(LowerWide(query)) != std::wstring::npos;
+}
+
+HWND FindChooseGroupsListBox(HWND dlg) {
+	return ChooseGroupsListBoxImpl(dlg);
 }
 
 std::vector<BYTE> BuildGroupsDialogTemplate() {
