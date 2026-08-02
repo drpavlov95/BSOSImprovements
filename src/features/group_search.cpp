@@ -42,7 +42,9 @@ const UINT_PTR kFrameSubclassId = 0xB506;
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 UINT g_showMsg = 0;
-bool g_busy = false; // reentrancia: o nosso proprio dialogo tambem ativa
+bool g_busy = false;      // reentrancia: o nosso proprio dialogo tambem ativa
+bool g_refreshing = false; // repopular a lista dispara notificacao por item
+bool g_dialogOpen = false; // impede dois dialogos sobre o mesmo estado global
 
 std::vector<std::wstring> g_allGroups;  // todos os nomes, ordem original
 std::vector<bool> g_checked;            // marcacao por indice ORIGINAL
@@ -130,6 +132,19 @@ const WORD kAtomStatic = 0x0082;
 
 // ------------------------------------------------------------ nosso dialogo
 
+// Escreve o contador. Um lugar so, para as duas origens -- repopular a lista e
+// marcar um item -- nao divergirem no numero mostrado.
+void UpdateCounter(HWND dlg, int visibleCount) {
+	int checked = 0;
+	for (bool on : g_checked)
+		checked += on ? 1 : 0;
+
+	wchar_t status[160];
+	swprintf_s(status, L"%d of %d groups \x00b7 %d checked", visibleCount,
+			   static_cast<int>(g_allGroups.size()), checked);
+	SetDlgItemTextW(dlg, kIdCounter, status);
+}
+
 void RefreshList(HWND dlg) {
 	HWND list = GetDlgItem(dlg, kIdList);
 	HWND search = GetDlgItem(dlg, kIdSearch);
@@ -138,6 +153,7 @@ void RefreshList(HWND dlg) {
 	GetWindowTextW(search, raw, 256);
 	const std::wstring query = TrimWide(raw);
 
+	g_refreshing = true;
 	SendMessageW(list, WM_SETREDRAW, FALSE, 0);
 	ListView_DeleteAllItems(list);
 	g_visible.clear();
@@ -164,10 +180,9 @@ void RefreshList(HWND dlg) {
 	SendMessageW(list, WM_SETREDRAW, TRUE, 0);
 	InvalidateRect(list, nullptr, TRUE);
 
-	wchar_t status[160];
-	swprintf_s(status, L"%d of %d groups \x00b7 %d checked",
-			   row, static_cast<int>(g_allGroups.size()), checkedTotal);
-	SetDlgItemTextW(dlg, kIdCounter, status);
+	g_refreshing = false;
+	UpdateCounter(dlg, row);
+	(void)checkedTotal;
 }
 
 // Le as marcacoes da list view de volta para o vetor por indice original. Isso
@@ -270,19 +285,17 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 		case WM_NOTIFY: {
 			auto* header = reinterpret_cast<NMHDR*>(lParam);
-			if (header->idFrom == kIdList && header->code == LVN_ITEMCHANGED) {
+			// g_refreshing: repovoar a lista dispara LVN_ITEMCHANGED a cada
+			// item inserido. Sem esta guarda, o sincronismo abaixo leria o
+			// estado de marcacao de uma lista pela metade e escreveria de
+			// volta em g_checked -- lendo, portanto, o que ele mesmo ainda nao
+			// terminou de montar.
+			if (!g_refreshing && header->idFrom == kIdList && header->code == LVN_ITEMCHANGED) {
 				auto* changed = reinterpret_cast<NMLISTVIEW*>(lParam);
 				// Bit de imagem de estado mudou: alguem marcou ou desmarcou.
 				if (changed->uChanged & LVIF_STATE) {
 					SyncChecksFromList(dlg);
-					int total = 0;
-					for (bool on : g_checked)
-						total += on ? 1 : 0;
-					wchar_t status[160];
-					swprintf_s(status, L"%d of %d groups \x00b7 %d checked",
-							   static_cast<int>(g_visible.size()),
-							   static_cast<int>(g_allGroups.size()), total);
-					SetDlgItemTextW(dlg, kIdCounter, status);
+					UpdateCounter(dlg, static_cast<int>(g_visible.size()));
 				}
 			}
 			break;
@@ -478,6 +491,19 @@ void HandleChooseGroupsDialog(HWND dlg, HWND listBox) {
 
 // Roda no frame, ja fora do loop modal do dialogo do wx.
 void ShowAndApply() {
+	// g_allGroups e g_checked sao estado global; dois dialogos ao mesmo tempo
+	// escreveriam um por cima do outro. Nao deveria acontecer, mas a mensagem
+	// que abre isto e postada, e mensagem postada pode chegar duas vezes.
+	if (g_dialogOpen) {
+		LogF("group_search: ja ha um dialogo aberto, ignorando");
+		return;
+	}
+
+	g_dialogOpen = true;
+	struct Guard {
+		~Guard() { g_dialogOpen = false; }
+	} guard;
+
 	if (ShowOurDialog(g_frame) != IDOK) {
 		LogF("group_search: cancelado");
 		return;

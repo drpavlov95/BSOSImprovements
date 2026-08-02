@@ -45,9 +45,16 @@ bool RunOnUiThread(HWND target, void (*fn)(void*), void* ctx) {
 		return false;
 	}
 
-	// SendMessage entre threads: bloqueia ate a thread de UI processar, o que
-	// garante que o trampolim ja rodou quando isto retorna.
-	SendMessageW(target, WM_NULL, 0, 0);
+	// SendMessage entre threads bloqueia ate a thread de destino processar, o
+	// que garante que o trampolim ja rodou quando isto retorna.
+	//
+	// Com timeout de proposito: um SendMessage sem limite trava a thread de
+	// bootstrap para sempre se a UI estiver ocupada ou pendurada, e isso roda
+	// na instalacao de todas as features. Melhor desistir e registrar do que
+	// deixar uma thread parada dentro do processo do usuario.
+	DWORD_PTR unused = 0;
+	if (!SendMessageTimeoutW(target, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 5000, &unused))
+		LogF("ui_thread: a janela nao respondeu em 5s (erro %lu)", GetLastError());
 
 	UnhookWindowsHookEx(g_trampoline);
 	g_trampoline = nullptr;
