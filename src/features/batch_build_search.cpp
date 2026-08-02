@@ -14,7 +14,7 @@
 namespace {
 
 const int kIdSearch = 0xBF01;
-const int kIdToggle = 0xBF02;
+UINT g_deferredLayout = 0;
 const UINT_PTR kDialogSubclassId = 0xB509;
 const UINT_PTR kEditSubclassId = 0xB50A;
 
@@ -25,6 +25,10 @@ HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 HWND g_dialog = nullptr;
 HWND g_list = nullptr;
+HWND g_edit = nullptr; // guardado por handle, nao buscado por id: se o id
+					   // batesse com o de algum controle do XRC, GetDlgItem
+					   // devolveria o controle errado
+RECT g_appliedListRect = {};
 std::vector<std::wstring> g_items;
 int g_lastMatch = -1;
 
@@ -39,19 +43,23 @@ std::wstring ListItemText(HWND listBox, int index) {
 }
 
 std::wstring SearchText() {
-	HWND edit = GetDlgItem(g_dialog, kIdSearch);
-	if (!edit)
+	if (!g_edit)
 		return std::wstring();
 	wchar_t raw[256] = {};
-	GetWindowTextW(edit, raw, 256);
+	GetWindowTextW(g_edit, raw, 256);
 	return raw;
 }
 
 // Rola ate um item e o deixa selecionado. Nao mexe na marcacao.
 void RevealItem(int index) {
-	if (index < 0)
+	if (index < 0 || !g_list)
 		return;
-	SendMessageW(g_list, LB_SETCURSEL, static_cast<WPARAM>(index), 0);
+
+	// LB_SETCURSEL devolve LB_ERR em lista de selecao multipla; nesse caso o
+	// caminho e LB_SETSEL. Barato cobrir os dois em vez de assumir qual e.
+	if (SendMessageW(g_list, LB_SETCURSEL, static_cast<WPARAM>(index), 0) == LB_ERR)
+		SendMessageW(g_list, LB_SETSEL, TRUE, static_cast<LPARAM>(index));
+
 	SendMessageW(g_list, LB_SETTOPINDEX, static_cast<WPARAM>(index), 0);
 	g_lastMatch = index;
 }
@@ -74,61 +82,47 @@ void JumpToMatch(bool fromCurrent) {
 	}
 }
 
-// Alterna a marcacao dos itens que casam.
-//
-// Vai por tecla, e nao escrevendo estado: o wxCheckListBox guarda a marcacao
-// em estrutura propria, invisivel de fora. Selecionar o item e mandar espaco
-// faz o proprio wx alternar, entao o estado interno dele nunca sai de sincronia
-// com o que aparece na tela.
-void ToggleMatching() {
-	const std::wstring query = SearchText();
-	if (query.empty()) {
-		LogF("batch_build: busca vazia, nada a alternar");
-		return;
-	}
-
-	int toggled = 0;
-	for (int i = 0; i < static_cast<int>(g_items.size()); ++i) {
-		if (!MatchesFilter(g_items[i], query))
-			continue;
-
-		SendMessageW(g_list, LB_SETCURSEL, static_cast<WPARAM>(i), 0);
-		SendMessageW(g_list, WM_KEYDOWN, VK_SPACE, 0);
-		SendMessageW(g_list, WM_CHAR, VK_SPACE, 0);
-		SendMessageW(g_list, WM_KEYUP, VK_SPACE, 0);
-		++toggled;
-	}
-
-	LogF("batch_build: alternados %d itens que casam com '%ls'", toggled, query.c_str());
-}
-
 // Reaplica a nossa faixa depois que o wx faz o layout dele.
 //
 // O dialogo tem wxRESIZE_BORDER, entao o wx refaz o layout a cada WM_SIZE e
 // devolve a lista ao tamanho cheio. Recalcular sempre a partir do retangulo
 // que ele acabou de definir mantem isso estavel e nao acumula.
 void ApplyLayout() {
-	HWND edit = GetDlgItem(g_dialog, kIdSearch);
-	HWND toggle = GetDlgItem(g_dialog, kIdToggle);
-	if (!g_list || !edit || !toggle)
+	if (!g_dialog || !g_edit || !g_list || !IsWindow(g_list))
 		return;
 
 	RECT lr = {};
 	GetWindowRect(g_list, &lr);
 	MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&lr), 2);
 
-	const int width = lr.right - lr.left;
-	const int height = lr.bottom - lr.top;
-	if (height <= kBandHeight)
+	// Idempotencia. A lista so precisa encolher quando o wx acabou de
+	// re-expandi-la; se ela ja esta onde nos a deixamos, aplicar de novo
+	// encolheria mais uma faixa -- e WM_SHOWWINDOW, WM_SIZE e a mensagem
+	// adiada chegam em sequencia, entao a lista iria sumindo aos poucos.
+	if (EqualRect(&lr, &g_appliedListRect))
 		return;
 
-	const int toggleWidth = 130;
+	const int width = lr.right - lr.left;
+	const int height = lr.bottom - lr.top;
+	// Antes de a janela ser exibida o retangulo ainda nao e o definitivo; sair
+	// aqui evita posicionar a busca com base num tamanho que vai mudar.
+	if (width <= 20 || height <= kBandHeight * 2)
+		return;
+
 	SetWindowPos(g_list, nullptr, lr.left, lr.top + kBandHeight, width, height - kBandHeight,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(edit, nullptr, lr.left, lr.top + 1, width - toggleWidth - 6, kBandHeight - 5,
+	SetWindowPos(g_edit, nullptr, lr.left, lr.top + 1, width, kBandHeight - 5,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(toggle, nullptr, lr.left + width - toggleWidth, lr.top, toggleWidth, kBandHeight - 3,
-				 SWP_NOZORDER | SWP_NOACTIVATE);
+
+	SetRect(&g_appliedListRect, lr.left, lr.top + kBandHeight, lr.right, lr.bottom);
+
+	// Uma vez so: se ficar registrando a cada WM_SIZE, arrastar a borda do
+	// dialogo enche o log.
+	static bool logged = false;
+	if (!logged) {
+		logged = true;
+		LogF("batch_build: busca posicionada em (%ld,%ld) %dx%d", lr.left, lr.top + 1, width, kBandHeight - 5);
+	}
 }
 
 // Enter dentro da caixa de busca dispararia o botao padrao do dialogo, que e
@@ -147,19 +141,23 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 }
 
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (g_deferredLayout && msg == g_deferredLayout) {
+		ApplyLayout();
+		return 0;
+	}
+
 	switch (msg) {
 		case WM_COMMAND:
-			if (LOWORD(wParam) == kIdSearch && HIWORD(wParam) == EN_CHANGE) {
+			// Compara o handle, nao so o id: se algum controle do XRC tiver o
+			// mesmo id, comparar por id sozinho misturaria os dois.
+			if (HIWORD(wParam) == EN_CHANGE && reinterpret_cast<HWND>(lParam) == g_edit) {
 				g_lastMatch = -1;
 				JumpToMatch(false);
 				return 0;
 			}
-			if (LOWORD(wParam) == kIdToggle && HIWORD(wParam) == BN_CLICKED) {
-				ToggleMatching();
-				return 0;
-			}
 			break;
 
+		case WM_SHOWWINDOW:
 		case WM_SIZE: {
 			// Deixa o wx posicionar primeiro, depois reserva a faixa.
 			LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -171,6 +169,9 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
 			g_dialog = nullptr;
 			g_list = nullptr;
+			g_edit = nullptr;
+			g_lastMatch = -1;
+			SetRectEmpty(&g_appliedListRect);
 			g_items.clear();
 			break;
 
@@ -187,26 +188,24 @@ void AddSearchControls(HWND dlg) {
 	HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
 								WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
 								0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdSearch)), inst, nullptr);
-	HWND toggle = CreateWindowExW(0, L"BUTTON", L"Toggle matching",
-								  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-								  0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdToggle)), inst, nullptr);
-	if (!edit || !toggle) {
-		LogF("batch_build: nao consegui criar os controles de busca");
+	if (!edit) {
+		LogF("batch_build: nao consegui criar a caixa de busca (erro %lu)", GetLastError());
 		return;
 	}
 
-	if (font) {
+	if (font)
 		SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-		SendMessageW(toggle, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-	}
 	SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search outfits..."));
 	SetWindowSubclass(edit, EditSubclassProc, kEditSubclassId, 0);
+	g_edit = edit;
 }
 
 void HandleBatchBuildDialog(HWND dlg, HWND listBox) {
 	g_dialog = dlg;
 	g_list = listBox;
+	g_edit = nullptr;
 	g_lastMatch = -1;
+	SetRectEmpty(&g_appliedListRect);
 
 	const int count = static_cast<int>(SendMessageW(listBox, LB_GETCOUNT, 0, 0));
 	g_items.clear();
@@ -216,7 +215,15 @@ void HandleBatchBuildDialog(HWND dlg, HWND listBox) {
 
 	AddSearchControls(dlg);
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
-	ApplyLayout();
+
+	// O layout so vale depois que a janela existir de verdade. Aqui ainda
+	// estamos dentro do WM_WINDOWPOSCHANGING que a exibe, e o retangulo da
+	// lista ainda e o provisorio -- foi por isso que a busca aparecia fora do
+	// lugar. A mensagem adiada roda com o dialogo ja montado.
+	if (!g_deferredLayout)
+		g_deferredLayout = RegisterWindowMessageW(L"BSOSImprovements_BatchBuildLayout");
+	if (g_deferredLayout)
+		PostMessageW(dlg, g_deferredLayout, 0, 0);
 
 	LogF("batch_build: busca instalada, %d outfits", count);
 }
