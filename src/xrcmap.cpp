@@ -55,7 +55,60 @@ struct Token {
 	Kind kind = End;
 	std::string name;
 	std::string cls;
+	std::string label; // <label> do proprio objeto, ainda cru
 };
+
+std::string DecodeEntities(const std::string& s) {
+	std::string out;
+	for (size_t i = 0; i < s.size();) {
+		if (s[i] == '&') {
+			if (s.compare(i, 5, "&amp;") == 0) { out.push_back('&'); i += 5; continue; }
+			if (s.compare(i, 4, "&lt;") == 0) { out.push_back('<'); i += 4; continue; }
+			if (s.compare(i, 4, "&gt;") == 0) { out.push_back('>'); i += 4; continue; }
+			if (s.compare(i, 6, "&quot;") == 0) { out.push_back('"'); i += 6; continue; }
+			if (s.compare(i, 6, "&apos;") == 0) { out.push_back('\''); i += 6; continue; }
+		}
+		out.push_back(s[i]);
+		++i;
+	}
+	return out;
+}
+
+// Deixa o rotulo do XRC no mesmo formato do rotulo lido do menu vivo.
+std::wstring NormalizeXrcLabel(const std::string& raw) {
+	std::string text = DecodeEntities(raw);
+
+	// O acelerador nao faz parte do nome. No XRC ele vem como "\t" literal --
+	// dois caracteres, barra e t -- e nao como um tab de verdade.
+	size_t cut = text.find("\\t");
+	if (cut != std::string::npos)
+		text.resize(cut);
+	cut = text.find('\t');
+	if (cut != std::string::npos)
+		text.resize(cut);
+
+	std::string clean;
+	for (char c : text) {
+		if (c != '&') // mnemonico
+			clean.push_back(c);
+	}
+
+	size_t begin = clean.find_first_not_of(" \r\n");
+	if (begin == std::string::npos)
+		return std::wstring();
+	size_t end = clean.find_last_not_of(" \r\n");
+	clean = clean.substr(begin, end - begin + 1);
+
+	const int wide = MultiByteToWideChar(CP_UTF8, 0, clean.c_str(),
+										 static_cast<int>(clean.size()), nullptr, 0);
+	if (wide <= 0)
+		return std::wstring();
+
+	std::wstring out(static_cast<size_t>(wide), L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, clean.c_str(), static_cast<int>(clean.size()),
+						out.data(), wide);
+	return out;
+}
 
 // Varredor minimo de tags. So enxerga <object>, </object> e <object/>;
 // qualquer outra tag (<label>, <help>, <enabled>) e ignorada, o que e
@@ -96,33 +149,60 @@ public:
 			t.kind = (!tag.empty() && tag.back() == '/') ? Token::SelfClose : Token::Open;
 			t.cls = Attribute(tag, "class");
 			t.name = Attribute(tag, "name");
+			t.label = PeekLabel();
 			return t;
 		}
 	}
 
 private:
+	// O <label> deste objeto, sem consumir nada. E o proprio label so se vier
+	// antes de qualquer <object> filho e antes do </object> que fecha este --
+	// senao seria o label de outro item.
+	std::string PeekLabel() const {
+		const size_t open = text_.find("<label>", pos_);
+		if (open == std::string::npos)
+			return std::string();
+
+		const size_t child = text_.find("<object", pos_);
+		if (child != std::string::npos && child < open)
+			return std::string();
+
+		const size_t close = text_.find("</object>", pos_);
+		if (close != std::string::npos && close < open)
+			return std::string();
+
+		const size_t end = text_.find("</label>", open);
+		if (end == std::string::npos)
+			return std::string();
+
+		const size_t begin = open + 7; // strlen("<label>")
+		return text_.substr(begin, end - begin);
+	}
+
 	const std::string& text_;
 	size_t pos_ = 0;
 };
 
 // Percorre os filhos <object> do container atual, contando posicao.
 // Consome ate o </object> correspondente.
-bool WalkChildren(Scanner& scanner, const std::string& target, MenuPath& path) {
+bool WalkChildren(Scanner& scanner, const std::string& target, MenuTrail& trail) {
 	int index = 0;
 	for (;;) {
 		Token tok = scanner.Next();
 		if (tok.kind == Token::End || tok.kind == Token::Close)
 			return false;
 
-		path.push_back(index);
+		trail.path.push_back(index);
+		trail.labels.push_back(NormalizeXrcLabel(tok.label));
 		if (tok.name == target)
 			return true;
 
 		// SelfClose nao tem conteudo; so Open abre um nivel.
-		if (tok.kind == Token::Open && WalkChildren(scanner, target, path))
+		if (tok.kind == Token::Open && WalkChildren(scanner, target, trail))
 			return true;
 
-		path.pop_back();
+		trail.path.pop_back();
+		trail.labels.pop_back();
 		++index;
 	}
 }
@@ -130,14 +210,18 @@ bool WalkChildren(Scanner& scanner, const std::string& target, MenuPath& path) {
 } // namespace
 
 MenuPath ResolveMenuPath(const wchar_t* xrcFile, const char* xrcName) {
-	MenuPath path;
+	return ResolveMenuTrail(xrcFile, xrcName).path;
+}
+
+MenuTrail ResolveMenuTrail(const wchar_t* xrcFile, const char* xrcName) {
+	MenuTrail trail;
 	if (!xrcFile || !xrcName || !*xrcName)
-		return path;
+		return trail;
 
 	std::string xml = ReadWholeFile(xrcFile);
 	if (xml.empty()) {
 		LogF("xrcmap: nao consegui ler o XRC");
-		return path;
+		return trail;
 	}
 
 	// Avanca ate o menubar. Objetos anteriores (frame, toolbars) nao contam --
@@ -147,14 +231,16 @@ MenuPath ResolveMenuPath(const wchar_t* xrcFile, const char* xrcName) {
 		Token tok = scanner.Next();
 		if (tok.kind == Token::End) {
 			LogF("xrcmap: nenhum wxMenuBar no XRC");
-			return path;
+			return trail;
 		}
 		if (tok.kind == Token::Open && tok.cls == "wxMenuBar")
 			break;
 	}
 
-	if (!WalkChildren(scanner, xrcName, path))
-		path.clear();
+	if (!WalkChildren(scanner, xrcName, trail)) {
+		trail.path.clear();
+		trail.labels.clear();
+	}
 
-	return path;
+	return trail;
 }

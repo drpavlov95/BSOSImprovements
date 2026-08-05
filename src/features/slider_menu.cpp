@@ -9,10 +9,10 @@ SliderMenuRefs ResolveSliderMenu(const std::wstring& appDir) {
 	SliderMenuRefs refs;
 
 	const std::wstring xrc = appDir + L"res\\xrc\\OutfitStudio.xrc";
-	refs.importSubmenu = ResolveMenuPath(xrc.c_str(), "menuImportSlider");
-	refs.exportSubmenu = ResolveMenuPath(xrc.c_str(), "menuExportSlider");
-	refs.importObjItem = ResolveMenuPath(xrc.c_str(), "sliderImportOBJ");
-	refs.exportObjItem = ResolveMenuPath(xrc.c_str(), "sliderExportOBJ");
+	refs.importSubmenu = ResolveMenuTrail(xrc.c_str(), "menuImportSlider");
+	refs.exportSubmenu = ResolveMenuTrail(xrc.c_str(), "menuExportSlider");
+	refs.importObjItem = ResolveMenuTrail(xrc.c_str(), "sliderImportOBJ");
+	refs.exportObjItem = ResolveMenuTrail(xrc.c_str(), "sliderExportOBJ");
 
 	refs.ok = !refs.importSubmenu.empty() && !refs.exportSubmenu.empty() &&
 			  !refs.importObjItem.empty() && !refs.exportObjItem.empty();
@@ -33,14 +33,14 @@ bool IsSliderEditModeActive(HWND frame, const SliderMenuRefs& refs) {
 	if (!bar)
 		return false;
 
-	return IsEnabledAtPath(bar, refs.importSubmenu);
+	return IsEnabledAtLabeledPath(bar, refs.importSubmenu.path, refs.importSubmenu.labels);
 }
 
-UINT MenuCommandId(HWND frame, const MenuPath& path) {
-	if (!frame || path.empty())
+UINT MenuCommandId(HWND frame, const MenuTrail& trail) {
+	if (!frame || trail.empty())
 		return 0;
 	HMENU bar = GetMenu(frame);
-	return bar ? CommandIdAtPath(bar, path) : 0;
+	return bar ? CommandIdAtLabeledPath(bar, trail.path, trail.labels) : 0;
 }
 
 bool InvokeMenuCommandId(HWND frame, UINT id) {
@@ -86,6 +86,14 @@ std::string PathToText(const MenuPath& path) {
 	return text.empty() ? "(vazio)" : text;
 }
 
+// Onde o item foi parar de verdade no menu vivo, que pode nao ser onde o XRC
+// diz -- e a diferenca entre os dois e justamente o sintoma de outro mod ter
+// inserido item antes dele.
+int LiveLeafIndex(HMENU bar, const MenuTrail& trail) {
+	int index = -1;
+	return ContainerAtLabeledPath(bar, trail.path, trail.labels, index) ? index : -1;
+}
+
 } // namespace
 
 void LogSliderMenuState(HWND frame, const SliderMenuRefs& refs) {
@@ -95,25 +103,28 @@ void LogSliderMenuState(HWND frame, const SliderMenuRefs& refs) {
 		return;
 	}
 
-	LogF("slider_menu: import submenu=%s estado=0x%08X | item=%s id=%u",
-		 PathToText(refs.importSubmenu).c_str(), StateAtPath(bar, refs.importSubmenu),
-		 PathToText(refs.importObjItem).c_str(), CommandIdAtPath(bar, refs.importObjItem));
-	LogF("slider_menu: export submenu=%s estado=0x%08X | item=%s id=%u",
-		 PathToText(refs.exportSubmenu).c_str(), StateAtPath(bar, refs.exportSubmenu),
-		 PathToText(refs.exportObjItem).c_str(), CommandIdAtPath(bar, refs.exportObjItem));
+	LogF("slider_menu: import submenu xrc=%s vivo=%d | item xrc=%s vivo=%d id=%u",
+		 PathToText(refs.importSubmenu.path).c_str(), LiveLeafIndex(bar, refs.importSubmenu),
+		 PathToText(refs.importObjItem.path).c_str(), LiveLeafIndex(bar, refs.importObjItem),
+		 CommandIdAtLabeledPath(bar, refs.importObjItem.path, refs.importObjItem.labels));
+	LogF("slider_menu: export submenu xrc=%s vivo=%d | item xrc=%s vivo=%d id=%u",
+		 PathToText(refs.exportSubmenu.path).c_str(), LiveLeafIndex(bar, refs.exportSubmenu),
+		 PathToText(refs.exportObjItem.path).c_str(), LiveLeafIndex(bar, refs.exportObjItem),
+		 CommandIdAtLabeledPath(bar, refs.exportObjItem.path, refs.exportObjItem.labels));
+	LogF("slider_menu: edit mode agora=%d", IsSliderEditModeActive(frame, refs) ? 1 : 0);
 	LogF("slider_menu: MFS_GRAYED=0x%08X, entao estado com esse bit = fora do edit mode",
 		 static_cast<unsigned>(MFS_GRAYED));
 }
 
-bool InvokeMenuCommand(HWND frame, const MenuPath& path) {
-	if (!frame || path.empty())
+bool InvokeMenuCommand(HWND frame, const MenuTrail& trail) {
+	if (!frame || trail.empty())
 		return false;
 
 	HMENU bar = GetMenu(frame);
 	if (!bar)
 		return false;
 
-	const UINT id = CommandIdAtPath(bar, path);
+	const UINT id = CommandIdAtLabeledPath(bar, trail.path, trail.labels);
 	if (id == 0)
 		return false;
 

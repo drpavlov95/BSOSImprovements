@@ -233,7 +233,7 @@ bool Install(HWND frame) {
 	// agora para nao pagar a leitura do XRC a cada tecla.
 	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
 	for (const RemapEntry& entry : cfg.remaps) {
-		MenuPath path = ResolveMenuPath(xrc.c_str(), entry.xrcName.c_str());
+		MenuTrail path = ResolveMenuTrail(xrc.c_str(), entry.xrcName.c_str());
 		if (path.empty()) {
 			// Nome errado no INI nao pode derrubar os outros atalhos.
 			LogF("remap: '%s' nao existe no XRC, ignorado", entry.xrcName.c_str());

@@ -17,3 +17,20 @@ using MenuPath = std::vector<int>;
 // casar por ID: XRCID() e atribuido em runtime pela ordem de registro, entao
 // nao ha valor estavel para hardcodar.
 MenuPath ResolveMenuPath(const wchar_t* xrcFile, const char* xrcName);
+
+// O caminho mais o rotulo de cada passo, ja normalizado para comparacao:
+// sem o acelerador depois do \t, sem os & de mnemonico, sem espaco nas pontas.
+//
+// So a posicao nao basta. Outros mods inserem itens no menu VIVO, que nao
+// existem no XRC -- o mod Drape injeta um separador e "Smart Conform All" no
+// menu Slider -- e dali para a frente toda posicao lida do XRC aponta para o
+// item errado. Com o rotulo da para reencontrar o item onde quer que ele tenha
+// parado, e so cair na posicao quando o texto nao bater (instalacao traduzida).
+struct MenuTrail {
+	MenuPath path;
+	std::vector<std::wstring> labels; // mesmo tamanho de path
+
+	bool empty() const { return path.empty(); }
+};
+
+MenuTrail ResolveMenuTrail(const wchar_t* xrcFile, const char* xrcName);

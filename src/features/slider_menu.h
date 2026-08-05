@@ -9,10 +9,10 @@
 // Caminhos dos comandos de slider no menu do Outfit Studio, resolvidos pelo
 // XRC uma vez na inicializacao.
 struct SliderMenuRefs {
-	MenuPath importSubmenu; // menuImportSlider -- e daqui que se le o edit mode
-	MenuPath exportSubmenu; // menuExportSlider
-	MenuPath importObjItem; // sliderImportOBJ
-	MenuPath exportObjItem; // sliderExportOBJ
+	MenuTrail importSubmenu; // menuImportSlider -- e daqui que se le o edit mode
+	MenuTrail exportSubmenu; // menuExportSlider
+	MenuTrail importObjItem; // sliderImportOBJ
+	MenuTrail exportObjItem; // sliderExportOBJ
 
 	// Ids lidos do menu vivo uma unica vez, na instalacao. Reler a cada tecla
 	// se mostrou pouco confiavel -- a leitura funcionava na inicializacao e
@@ -36,10 +36,10 @@ bool IsSliderEditModeActive(HWND frame, const SliderMenuRefs& refs);
 
 // Dispara um comando de menu por WM_COMMAND -- o mesmo caminho que o Windows
 // usa quando o item e clicado.
-bool InvokeMenuCommand(HWND frame, const MenuPath& path);
+bool InvokeMenuCommand(HWND frame, const MenuTrail& trail);
 
 // Id do comando lido do menu vivo. 0 se o caminho nao existir.
-UINT MenuCommandId(HWND frame, const MenuPath& path);
+UINT MenuCommandId(HWND frame, const MenuTrail& trail);
 
 // Dispara por id ja conhecido, sem caminhar o menu. Assincrono: a mensagem vai
 // para a fila. Use para comandos que abrem dialogo, que nao podem bloquear

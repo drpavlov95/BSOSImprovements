@@ -71,10 +71,10 @@ TEST(ReadsEditModeFromMenuStateAndPostsCommand) {
 	TEST_ASSERT(frame != nullptr);
 
 	SliderMenuRefs refs;
-	refs.importSubmenu = {0, 2};    // o submenu de import, apos o separador
-	refs.exportSubmenu = {0, 3};
-	refs.importObjItem = {0, 2, 2}; // Import OBJ
-	refs.exportObjItem = {0, 3, 2}; // Export OBJ
+	refs.importSubmenu.path = {0, 2};    // o submenu de import, apos o separador
+	refs.exportSubmenu.path = {0, 3};
+	refs.importObjItem.path = {0, 2, 2}; // Import OBJ
+	refs.exportObjItem.path = {0, 3, 2}; // Export OBJ
 	refs.ok = true;
 
 	HMENU bar = GetMenu(frame);
@@ -114,8 +114,8 @@ TEST(ReadsEditModeFromMenuStateAndPostsCommand) {
 	// Id zero ou caminho invalido nao podem postar nada.
 	g_lastCommand = 0;
 	TEST_ASSERT(!InvokeMenuCommandId(frame, 0));
-	TEST_ASSERT(!InvokeMenuCommand(frame, MenuPath{}));
-	TEST_ASSERT(!InvokeMenuCommand(frame, MenuPath{0, 99}));
+	TEST_ASSERT(!InvokeMenuCommand(frame, MenuTrail{}));
+	TEST_ASSERT(!InvokeMenuCommand(frame, MenuTrail{{0, 99}, {}}));
 	DrainMessages();
 	TEST_ASSERT(g_lastCommand == 0);
 
@@ -123,6 +123,60 @@ TEST(ReadsEditModeFromMenuStateAndPostsCommand) {
 	// ativo, para nao disparar o comando errado.
 	SliderMenuRefs broken;
 	TEST_ASSERT(!IsSliderEditModeActive(frame, broken));
+
+	DestroyWindow(frame);
+	return true;
+}
+
+// Outro mod inserindo item no menu VIVO.
+//
+// Caso real: o mod Drape injeta um separador e "Smart Conform All" no menu
+// Slider do Outfit Studio. Nada disso existe no XRC, entao toda posicao lida
+// do XRC dali para frente aponta dois itens antes do certo, e Shift+E/Shift+I
+// paravam de funcionar sem dizer nada.
+TEST(SurvivesAnotherModInjectingMenuItems) {
+	HWND frame = MakeFrameWithSliderMenu();
+	TEST_ASSERT(frame != nullptr);
+
+	HMENU bar = GetMenu(frame);
+	HMENU sliderMenu = SubMenuAt(bar, 0);
+	TEST_ASSERT(sliderMenu != nullptr);
+
+	InsertMenuW(sliderMenu, 1, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+	InsertMenuW(sliderMenu, 2, MF_BYPOSITION | MF_STRING, 9001,
+				L"Smart Conform All\tCtrl+Alt+C");
+
+	// Os submenus estavam em 2 e 3; agora estao em 4 e 5. O XRC continua
+	// dizendo 2 e 3, porque o XRC nao sabe que alguem injetou nada.
+	TEST_ASSERT(SubMenuAt(sliderMenu, 2) == nullptr); // aqui virou o item injetado
+
+	MenuTrail importObj{{0, 2, 2}, {L"Slider", L"Import Slider Data", L"Import OBJ..."}};
+	MenuTrail exportObj{{0, 3, 2}, {L"Slider", L"Export Slider Data", L"Export OBJ..."}};
+
+	// Com o rotulo, os itens sao reencontrados onde de fato foram parar.
+	TEST_ASSERT(MenuCommandId(frame, importObj) == 4003);
+	TEST_ASSERT(MenuCommandId(frame, exportObj) == 5003);
+
+	// Sem rotulo sobra a posicao crua, que e exatamente o bug: o caminho morre
+	// no item injetado, que nao e submenu.
+	MenuTrail blind = importObj;
+	blind.labels.clear();
+	TEST_ASSERT(MenuCommandId(frame, blind) == 0);
+
+	// O edit mode e lido do submenu de import, que tambem andou de lugar.
+	SliderMenuRefs refs;
+	refs.importSubmenu = MenuTrail{{0, 2}, {L"Slider", L"Import Slider Data"}};
+	refs.ok = true;
+
+	EnableMenuItem(sliderMenu, 4, MF_BYPOSITION | MF_GRAYED);
+	TEST_ASSERT(!IsSliderEditModeActive(frame, refs));
+	EnableMenuItem(sliderMenu, 4, MF_BYPOSITION | MF_ENABLED);
+	TEST_ASSERT(IsSliderEditModeActive(frame, refs));
+
+	// Rotulo que nao existe no menu vivo -- instalacao traduzida -- volta a
+	// valer a posicao do XRC, que e o comportamento antigo e nao uma quebra.
+	MenuTrail translated{{0, 4, 2}, {L"Curseur", L"Importer", L"Importer OBJ..."}};
+	TEST_ASSERT(MenuCommandId(frame, translated) == 4003);
 
 	DestroyWindow(frame);
 	return true;

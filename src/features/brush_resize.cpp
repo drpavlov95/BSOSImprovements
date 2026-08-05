@@ -154,8 +154,8 @@ bool Install(HWND frame) {
 	g_applied = 0;
 
 	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	const MenuPath increasePath = ResolveMenuPath(xrc.c_str(), "btnIncreaseSize");
-	const MenuPath decreasePath = ResolveMenuPath(xrc.c_str(), "btnDecreaseSize");
+	const MenuTrail increasePath = ResolveMenuTrail(xrc.c_str(), "btnIncreaseSize");
+	const MenuTrail decreasePath = ResolveMenuTrail(xrc.c_str(), "btnDecreaseSize");
 
 	if (increasePath.empty() || decreasePath.empty()) {
 		LogF("brush_resize: nao resolvi btnIncreaseSize/btnDecreaseSize no XRC");
