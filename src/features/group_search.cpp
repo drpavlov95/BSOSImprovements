@@ -437,47 +437,114 @@ std::wstring TextOf(HWND hwnd) {
 // A caixa de filtro de grupos e um wxSearchCtrl anexado ao slot "searchHolder";
 // o que interessa e o Edit nativo dentro dela.
 //
-// O BodySlide tem tres dessas caixas -- grupos, outfits e sliders -- e pegar
-// "o primeiro Edit" seria a mesma heuristica de ordem que ja se mostrou
-// perigosa na arvore de shapes. Discriminador melhor: so a caixa de grupos
-// contem, quando preenchida, uma lista de nomes que existem todos na lista de
-// grupos. Se nenhuma estiver preenchida nao ha como distinguir, e ai vale a
-// ordem de declaracao do XRC, onde searchHolder vem antes das outras.
-HWND FindGroupFilterEdit(HWND frame, const std::vector<std::wstring>& knownGroups) {
-	HWND fallback = nullptr;
+// Procurar "o primeiro Edit da janela" nao serve, e nao por pouco: cada slider
+// do BodySlide tem a sua caixinha de porcentagem, que tambem e um Edit. Numa
+// janela com sliders carregados sao dezenas delas, todas ANTES das caixas de
+// busca na varredura. O filtro acabava escrito dentro do campo de valor de um
+// slider -- "MPP CBBE Reference, MPP HIMBO Reference" no lugar de "0%" -- e a
+// lista de outfits, claro, nunca era filtrada.
 
-	for (int nth = 0; nth < 16; ++nth) {
-		HWND edit = FindDescendantByClass(frame, L"Edit", nth);
-		if (!edit)
-			break;
-		if (!fallback)
-			fallback = edit;
+// Texto de dica da caixa -- o "Filter groups..." apagado que aparece quando
+// ela esta vazia. O BodySlide define um diferente para cada caixa
+// (SetDescriptiveText), e no MSW isso vira o cue banner nativo.
+std::wstring CueBannerOf(HWND edit) {
+	wchar_t buffer[256] = {};
+	if (!SendMessageW(edit, EM_GETCUEBANNER, reinterpret_cast<WPARAM>(buffer),
+					  static_cast<LPARAM>(std::size(buffer))))
+		return std::wstring();
+	return std::wstring(buffer);
+}
 
-		if (knownGroups.empty())
-			continue;
+bool LooksLikeGroupCue(const std::wstring& cue) {
+	// Heuristica em ingles de proposito, e so como desempate. O BodySlide
+	// traduz esse texto, entao numa instalacao traduzida isto nao casa e a
+	// escolha cai nos criterios seguintes -- nunca depende so disto.
+	std::wstring lower;
+	for (wchar_t c : cue)
+		lower.push_back(static_cast<wchar_t>(std::towlower(c)));
+	return lower.find(L"group") != std::wstring::npos;
+}
 
-		const std::vector<std::wstring> tokens = ParseFilterTokens(TextOf(edit));
-		if (tokens.empty())
-			continue;
+void CollectEdits(HWND parent, std::vector<HWND>& out) {
+	for (HWND child : ChildrenOf(parent)) {
+		if (_wcsicmp(ClassOf(child).c_str(), L"Edit") == 0)
+			out.push_back(child);
+		CollectEdits(child, out);
+	}
+}
 
-		bool allKnown = true;
-		for (const std::wstring& token : tokens) {
-			if (std::find(knownGroups.begin(), knownGroups.end(), token) == knownGroups.end()) {
-				allKnown = false;
-				break;
-			}
-		}
-		if (allKnown)
+// Todo Edit da janela, sem limite de contagem.
+//
+// Havia um teto de 16 aqui. Com sliders carregados, os 16 primeiros sao todos
+// caixas de porcentagem de slider, e a varredura parava antes de chegar em
+// qualquer caixa de busca.
+std::vector<HWND> AllEdits(HWND frame) {
+	std::vector<HWND> edits;
+	if (frame)
+		CollectEdits(frame, edits);
+	return edits;
+}
+
+bool ContentProvesGroupBox(HWND edit, const std::vector<std::wstring>& knownGroups) {
+	if (knownGroups.empty())
+		return false;
+
+	const std::vector<std::wstring> tokens = ParseFilterTokens(TextOf(edit));
+	if (tokens.empty())
+		return false;
+
+	for (const std::wstring& token : tokens) {
+		if (std::find(knownGroups.begin(), knownGroups.end(), token) == knownGroups.end())
+			return false;
+	}
+	return true;
+}
+
+HWND GroupFilterEditImpl(HWND frame, const std::vector<std::wstring>& knownGroups) {
+	HWND byCue = nullptr;
+
+	for (HWND edit : AllEdits(frame)) {
+		// Conteudo e prova: so a caixa de grupos contem uma lista em que todo
+		// token e um nome de grupo existente.
+		if (ContentProvesGroupBox(edit, knownGroups))
 			return edit;
+
+		if (!byCue && LooksLikeGroupCue(CueBannerOf(edit)))
+			byCue = edit;
 	}
 
-	return fallback;
+	// Nada provou e a dica nao ajudou. Devolver "o primeiro Edit" seria pior que
+	// nao fazer nada: os primeiros sao campos de valor de slider, e escrever ali
+	// estraga um valor do usuario em vez de filtrar coisa alguma.
+	return byCue;
+}
+
+// Despeja no log as caixas que importam: as que tem dica -- as de busca -- mais
+// a escolhida. Nao lista as dezenas de campos de slider, que so fariam volume.
+void LogFilterCandidates(HWND frame, HWND chosen) {
+	const std::vector<HWND> edits = AllEdits(frame);
+	int withCue = 0;
+
+	for (size_t i = 0; i < edits.size(); ++i) {
+		const std::wstring cue = CueBannerOf(edits[i]);
+		if (cue.empty() && edits[i] != chosen)
+			continue;
+		++withCue;
+		LogF("group_search:   edit[%d] dica='%ls' texto='%ls'%s", static_cast<int>(i),
+			 cue.c_str(), TextOf(edits[i]).c_str(),
+			 edits[i] == chosen ? "  <== escolhida" : "");
+	}
+
+	LogF("group_search: %d edits na janela, %d com dica",
+		 static_cast<int>(edits.size()), withCue);
 }
 
 void WriteFilter(HWND frame, const std::wstring& text) {
-	HWND edit = FindGroupFilterEdit(frame, g_allGroups);
+	HWND edit = GroupFilterEditImpl(frame, g_allGroups);
+	LogFilterCandidates(frame, edit);
 	if (!edit) {
-		LogF("group_search: nao achei a caixa de filtro de grupos");
+		LogF("group_search: nao identifiquei a caixa de filtro de grupos -- nao escrevo "
+			 "em lugar nenhum, para nao estragar o valor de algum slider");
 		return;
 	}
 
@@ -499,7 +566,7 @@ void HandleChooseGroupsDialog(HWND dlg, HWND listBox) {
 	LogF("group_search: interceptado, %d grupos", static_cast<int>(g_allGroups.size()));
 
 	// Estado inicial: parse da caixa de filtro, o mesmo que o OnChooseGroups faz.
-	HWND edit = FindGroupFilterEdit(g_frame, g_allGroups);
+	HWND edit = GroupFilterEditImpl(g_frame, g_allGroups);
 	const std::vector<std::wstring> active = edit ? ParseFilterTokens(TextOf(edit)) : std::vector<std::wstring>();
 
 	g_checked.assign(g_allGroups.size(), false);
@@ -661,6 +728,10 @@ bool MatchesFilter(const std::wstring& name, const std::wstring& query) {
 	if (query.empty())
 		return true;
 	return LowerWide(name).find(LowerWide(query)) != std::wstring::npos;
+}
+
+HWND FindGroupFilterEdit(HWND frame, const std::vector<std::wstring>& knownGroups) {
+	return GroupFilterEditImpl(frame, knownGroups);
 }
 
 HWND FindChooseGroupsListBox(HWND dlg) {

@@ -48,3 +48,10 @@ std::vector<BYTE> BuildGroupsDialogTemplate();
 // Exposto para teste porque errar aqui significa sequestrar o dialogo errado
 // do BodySlide -- ja aconteceu com o de Batch Build.
 HWND FindChooseGroupsListBox(HWND dlg);
+
+// Qual das caixas de busca da janela e a de filtro de GRUPOS.
+//
+// Exposto para teste pelo mesmo motivo: errar aqui escreve os nomes dos grupos
+// na caixa errada. O 5.8.2 acrescentou uma segunda wxSearchCtrl irma para
+// filtrar outfits, e a escolha por ordem de enumeracao passou a pegar essa.
+HWND FindGroupFilterEdit(HWND frame, const std::vector<std::wstring>& knownGroups);

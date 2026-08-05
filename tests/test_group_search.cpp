@@ -4,6 +4,7 @@
 #include <commctrl.h>
 
 #include "features/group_search.h"
+#include "win32/winfind.h"
 
 TEST(ParsesFilterLikeBodySlide) {
 	// O OnChooseGroups tokeniza em ',' e ';' e faz trim dos dois lados.
@@ -170,5 +171,122 @@ TEST(DialogTemplateCreatesAllControls) {
 	TEST_ASSERT((ListView_GetExtendedListViewStyle(list) & LVS_EX_CHECKBOXES) != 0);
 
 	DestroyWindow(dlg);
+	return true;
+}
+
+// Escolher a caixa de filtro certa quando ha mais de uma.
+//
+// O 5.8.2 acrescentou uma segunda wxSearchCtrl ("Filter outfits...") irma da de
+// grupos. Ela e criada DEPOIS, e no Windows a janela criada por ultimo entra no
+// topo do z-order -- que e a ordem em que os filhos sao enumerados. Escolher
+// "o primeiro Edit" passou a escrever os nomes dos grupos no filtro de outfits,
+// e a lista de outfits esvaziava em vez de filtrar.
+TEST(PicksTheGroupFilterAndNotTheOutfitFilter) {
+	static bool ready = false;
+	if (!ready) {
+		WNDCLASSW wc = {};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"BSOSFilterHost";
+		RegisterClassW(&wc);
+		ready = true;
+	}
+
+	HWND frame = CreateWindowExW(0, L"BSOSFilterHost", L"frame", WS_OVERLAPPEDWINDOW,
+								 0, 0, 500, 300, nullptr, nullptr,
+								 GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(frame != nullptr);
+
+	// A de outfits primeiro, de proposito: assim a varredura a encontra antes,
+	// e escolher por ordem daria a caixa errada. Qual das duas vem primeiro no
+	// BodySlide de verdade nao da para reproduzir aqui -- o AttachUnknownControl
+	// reparenta as duas para paineis diferentes, e a ordem passa a depender da
+	// arvore de paineis. E justamente por nao dar para saber que a escolha nao
+	// pode se apoiar em ordem.
+	HWND outfits = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_VISIBLE,
+								   0, 30, 200, 24, frame, nullptr,
+								   GetModuleHandleW(nullptr), nullptr);
+	HWND groups = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_VISIBLE,
+								  0, 0, 200, 24, frame, nullptr,
+								  GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(groups && outfits);
+
+	SendMessageW(groups, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(L"Filter groups..."));
+	SendMessageW(outfits, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(L"Filter outfits..."));
+
+	const std::vector<std::wstring> known = {L"3BA", L"HIMBO", L"Unassigned"};
+
+	// Premissa afirmada, para o teste nao ser vazio: a varredura encontra a
+	// caixa errada primeiro. Sem isso, acertar seria sorte da ordem.
+	TEST_ASSERT(FindDescendantByClass(frame, L"Edit", 0) == outfits);
+
+	// Ambas vazias -- nenhum conteudo prova nada. So a dica desempata, e sem
+	// ela a escolha cairia na primeira encontrada, que e a de outfits.
+	TEST_ASSERT(FindGroupFilterEdit(frame, known) == groups);
+
+	// Conteudo e prova mais forte que a dica: nomes que existem todos na lista
+	// de grupos so podem estar na caixa de grupos.
+	SetWindowTextW(groups, L"3BA, HIMBO");
+	TEST_ASSERT(FindGroupFilterEdit(frame, known) == groups);
+
+	// Texto que nao e nome de grupo nao rouba a escolha.
+	SetWindowTextW(outfits, L"dragonbone");
+	TEST_ASSERT(FindGroupFilterEdit(frame, known) == groups);
+
+	// Sem dica reconhecivel -- instalacao traduzida -- e sem conteudo que prove,
+	// devolve nulo de proposito. Escrever num palpite e pior que nao escrever:
+	// o palpite cai num campo de valor de slider e estraga o valor do usuario.
+	SetWindowTextW(groups, L"");
+	SetWindowTextW(outfits, L"");
+	SendMessageW(groups, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(L"Filtrar grupos..."));
+	SendMessageW(outfits, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(L"Filtrar roupas..."));
+	TEST_ASSERT(FindGroupFilterEdit(frame, known) == nullptr);
+
+	DestroyWindow(frame);
+	return true;
+}
+
+// O caso real da instalacao do usuario: cada slider tem a sua caixinha de
+// porcentagem, que tambem e um Edit, e elas aparecem na varredura ANTES das
+// caixas de busca. Com um teto de 16 na varredura, nenhuma caixa de busca era
+// sequer examinada e o filtro ia parar dentro do campo de valor de um slider.
+TEST(SliderValueBoxesDoNotHijackTheFilter) {
+	static bool ready = false;
+	if (!ready) {
+		WNDCLASSW wc = {};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"BSOSSliderHost";
+		RegisterClassW(&wc);
+		ready = true;
+	}
+
+	HWND frame = CreateWindowExW(0, L"BSOSSliderHost", L"frame", WS_OVERLAPPEDWINDOW,
+								 0, 0, 500, 300, nullptr, nullptr,
+								 GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(frame != nullptr);
+
+	// 40 campos de slider primeiro -- bem mais que o teto de 16 que havia.
+	for (int i = 0; i < 40; ++i) {
+		HWND box = CreateWindowExW(0, L"Edit", L"0%", WS_CHILD, 0, i * 4, 40, 20,
+								   frame, nullptr, GetModuleHandleW(nullptr), nullptr);
+		TEST_ASSERT(box != nullptr);
+	}
+
+	HWND groups = CreateWindowExW(0, L"Edit", L"", WS_CHILD, 0, 200, 200, 24, frame,
+								  nullptr, GetModuleHandleW(nullptr), nullptr);
+	SendMessageW(groups, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(L"Filter groups..."));
+
+	const std::vector<std::wstring> known = {L"MPP CBBE Reference", L"MPP HIMBO Reference"};
+
+	HWND chosen = FindGroupFilterEdit(frame, known);
+	TEST_ASSERT(chosen == groups);
+
+	// E o texto do filtro nao pode ser confundido com conteudo de slider: "0%"
+	// nao e nome de grupo, entao nenhum campo de slider "prova" ser a caixa.
+	SetWindowTextW(groups, L"MPP CBBE Reference, MPP HIMBO Reference");
+	TEST_ASSERT(FindGroupFilterEdit(frame, known) == groups);
+
+	DestroyWindow(frame);
 	return true;
 }
