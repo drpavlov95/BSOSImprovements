@@ -17,7 +17,7 @@ if not exist dist mkdir dist
 if not exist build\dll mkdir build\dll
 
 set SRC=src\proxy.cpp
-for %%d in (src\core src\win32 src\features) do (
+for %%d in (src\core src\win32 src\features src\mesh) do (
     if exist %%d\*.cpp for %%f in (%%d\*.cpp) do set SRC=!SRC! %%f
 )
 if exist src\xrcmap.cpp set SRC=!SRC! src\xrcmap.cpp

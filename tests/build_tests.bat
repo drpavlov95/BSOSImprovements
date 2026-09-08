@@ -19,7 +19,7 @@ REM Fontes de teste, mais todo modulo de src que nao seja o proxy.
 REM proxy.cpp fica de fora: define DllMain e os exports, testados via LoadLibrary.
 set SRC=
 for %%f in (tests\*.cpp) do set SRC=!SRC! %%f
-for %%d in (src\core src\win32 src\features) do (
+for %%d in (src\core src\win32 src\features src\mesh) do (
     if exist %%d\*.cpp for %%f in (%%d\*.cpp) do set SRC=!SRC! %%f
 )
 if exist src\xrcmap.cpp set SRC=!SRC! src\xrcmap.cpp
