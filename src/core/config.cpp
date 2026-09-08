@@ -59,22 +59,26 @@ float ReadFloat(const wchar_t* ini, const wchar_t* section, const wchar_t* key, 
 } // namespace
 
 std::vector<RemapEntry> ReadRemapSection(const wchar_t* iniPath) {
+	return ReadKeySection(iniPath, L"Remap");
+}
+
+std::vector<RemapEntry> ReadKeySection(const wchar_t* iniPath, const wchar_t* section) {
 	std::vector<RemapEntry> entries;
-	if (!iniPath || !*iniPath)
+	if (!iniPath || !*iniPath || !section || !*section)
 		return entries;
 
 	// GetPrivateProfileSection devolve "chave=valor\0chave=valor\0\0".
 	std::vector<wchar_t> buffer(8192);
-	DWORD used = GetPrivateProfileSectionW(L"Remap", buffer.data(),
+	DWORD used = GetPrivateProfileSectionW(section, buffer.data(),
 										   static_cast<DWORD>(buffer.size()), iniPath);
 	if (used == 0)
 		return entries;
 
 	// A API sinaliza truncamento devolvendo o tamanho do buffer menos dois.
-	// Descartar tudo calado deixaria o usuario com os remaps sumindo sem
+	// Descartar tudo calado deixaria o usuario com as entradas sumindo sem
 	// explicacao.
 	if (used >= buffer.size() - 2) {
-		LogF("config: a secao [Remap] passou de %d caracteres e foi ignorada",
+		LogF("config: a secao [%ls] passou de %d caracteres e foi ignorada", section,
 			 static_cast<int>(buffer.size()));
 		return entries;
 	}
@@ -166,14 +170,29 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.referenceHotkey = ReadBool(iniPath, L"Features", L"ReferenceHotkey", c.referenceHotkey);
 
 	c.brushResizeDrag = ReadBool(iniPath, L"Features", L"BrushResizeDrag", c.brushResizeDrag);
+	c.shortcutTooltips = ReadBool(iniPath, L"Features", L"ShortcutTooltips", c.shortcutTooltips);
+	c.symmetrizeSearch = ReadBool(iniPath, L"Features", L"SymmetrizeSearch", c.symmetrizeSearch);
+	c.mirrorBonePose = ReadBool(iniPath, L"Features", L"MirrorBonePose", c.mirrorBonePose);
+	c.zeroSlidersHotkey = ReadBool(iniPath, L"Features", L"ZeroSlidersHotkey", c.zeroSlidersHotkey);
+	c.blenderCamera = ReadBool(iniPath, L"Features", L"BlenderCamera", c.blenderCamera);
 
 	c.selectReference = ReadHotkey(iniPath, L"SelectReference", c.selectReference);
 	c.exportSliderObj = ReadHotkey(iniPath, L"ExportSliderOBJ", c.exportSliderObj);
 	c.importSliderObj = ReadHotkey(iniPath, L"ImportSliderOBJ", c.importSliderObj);
 	c.brushResize = ReadHotkey(iniPath, L"BrushResize", c.brushResize);
+	c.zeroSliders = ReadHotkey(iniPath, L"ZeroSliders", c.zeroSliders);
+
+	c.mirrorSigns.rotationX = ReadBool(iniPath, L"MirrorPose", L"NegateRotationX", c.mirrorSigns.rotationX);
+	c.mirrorSigns.rotationY = ReadBool(iniPath, L"MirrorPose", L"NegateRotationY", c.mirrorSigns.rotationY);
+	c.mirrorSigns.rotationZ = ReadBool(iniPath, L"MirrorPose", L"NegateRotationZ", c.mirrorSigns.rotationZ);
+	c.mirrorSigns.offsetX = ReadBool(iniPath, L"MirrorPose", L"NegateOffsetX", c.mirrorSigns.offsetX);
+	c.mirrorSigns.offsetY = ReadBool(iniPath, L"MirrorPose", L"NegateOffsetY", c.mirrorSigns.offsetY);
+	c.mirrorSigns.offsetZ = ReadBool(iniPath, L"MirrorPose", L"NegateOffsetZ", c.mirrorSigns.offsetZ);
+	c.mirrorSigns.scale = ReadBool(iniPath, L"MirrorPose", L"NegateScale", c.mirrorSigns.scale);
 
 	c.brushResizeSensitivity = ReadFloat(iniPath, L"Tuning", L"BrushResizeSensitivity", c.brushResizeSensitivity);
 	c.remaps = ReadRemapSection(iniPath);
+	c.tooltipShortcuts = ReadKeySection(iniPath, L"TooltipShortcuts");
 
 	c.logFile = ReadBool(iniPath, L"Debug", L"LogFile", c.logFile);
 	return c;

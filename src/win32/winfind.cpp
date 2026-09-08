@@ -51,6 +51,46 @@ HWND FindDescendantByClass(HWND root, const wchar_t* cls, int nth) {
 	return FindDescendantImpl(root, cls, nth, seen);
 }
 
+namespace {
+
+void CollectDescendants(HWND root, const wchar_t* cls, std::vector<HWND>& out) {
+	for (HWND child : ChildrenOf(root)) {
+		if (_wcsicmp(ClassOf(child).c_str(), cls) == 0)
+			out.push_back(child);
+		CollectDescendants(child, cls, out);
+	}
+}
+
+} // namespace
+
+std::vector<HWND> FindDescendantsByClass(HWND root, const wchar_t* cls) {
+	std::vector<HWND> out;
+	if (root && cls)
+		CollectDescendants(root, cls, out);
+	return out;
+}
+
+HWND FindLargestVisibleByClass(HWND root, const wchar_t* cls) {
+	HWND best = nullptr;
+	long bestArea = 0;
+
+	for (HWND candidate : FindDescendantsByClass(root, cls)) {
+		if (!IsWindowVisible(candidate))
+			continue;
+
+		RECT rc = {};
+		if (!GetWindowRect(candidate, &rc))
+			continue;
+
+		const long area = static_cast<long>(rc.right - rc.left) * (rc.bottom - rc.top);
+		if (area > bestArea) {
+			bestArea = area;
+			best = candidate;
+		}
+	}
+	return best;
+}
+
 bool IsTextInputFocused() {
 	HWND focus = GetFocus();
 	if (!focus)

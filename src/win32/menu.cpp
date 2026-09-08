@@ -98,7 +98,7 @@ UINT CommandIdAt(HMENU parent, int index) {
 	return info.wID;
 }
 
-std::wstring MenuTextAt(HMENU parent, int index) {
+std::wstring MenuRawTextAt(HMENU parent, int index) {
 	if (!InRange(parent, index))
 		return std::wstring();
 
@@ -115,7 +115,15 @@ std::wstring MenuTextAt(HMENU parent, int index) {
 	info.cch = static_cast<UINT>(buffer.size());
 	if (!GetMenuItemInfoW(parent, static_cast<UINT>(index), TRUE, &info))
 		return std::wstring();
+
 	buffer.resize(info.cch);
+	return buffer;
+}
+
+std::wstring MenuTextAt(HMENU parent, int index) {
+	const std::wstring buffer = MenuRawTextAt(parent, index);
+	if (buffer.empty())
+		return std::wstring();
 
 	std::wstring clean;
 	for (wchar_t c : buffer) {

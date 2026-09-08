@@ -22,6 +22,24 @@ struct RemapEntry {
 	Hotkey key;
 };
 
+// Quais eixos do pose invertem o sinal ao espelhar para o osso do outro lado.
+//
+// Nao existe resposta unica: depende de como o esqueleto orienta os eixos
+// locais de cada osso, e um esqueleto customizado pode discordar do vanilla.
+// Por isso sao configuraveis em [MirrorPose]. Os defaults sao a convencao do
+// esqueleto do Skyrim, onde X e o eixo que atravessa o corpo de um lado ao
+// outro: espelhar nega o deslocamento em X e as duas rotacoes que giram em
+// torno dos outros dois eixos.
+struct MirrorPoseSigns {
+	bool rotationX = false;
+	bool rotationY = true;
+	bool rotationZ = true;
+	bool offsetX = true;
+	bool offsetY = false;
+	bool offsetZ = false;
+	bool scale = false;
+};
+
 struct Config {
 	bool groupSearch = true;
 	bool batchBuildSearch = true;
@@ -29,6 +47,15 @@ struct Config {
 	bool sliderObjHotkeys = true;
 	bool referenceHotkey = true;
 	bool brushResizeDrag = true;
+	bool shortcutTooltips = true;
+	bool symmetrizeSearch = true;
+	bool mirrorBonePose = true;
+	bool zeroSlidersHotkey = true;
+
+	// Desligada por padrao, ao contrario de todo o resto: as outras features
+	// acrescentam alguma coisa, esta TROCA a navegacao que o usuario ja tem na
+	// mao. Quem quer o esquema do Blender liga de proposito.
+	bool blenderCamera = false;
 
 	// 'B' e nao 'R': no vanilla, R e Recalculate Normals. B esta livre e e
 	// mnemonico de base shape, que e como o codigo do Outfit Studio chama o
@@ -38,16 +65,32 @@ struct Config {
 	Hotkey importSliderObj = Hotkey{'I', true, false, false};
 	Hotkey brushResize = Hotkey{'F', false, false, false};
 
+	// Z esta livre nos dois programas: o menu do Outfit Studio so usa Ctrl+Z, e
+	// o BodySlide nao tem atalho nenhum.
+	Hotkey zeroSliders = Hotkey{'Z', false, false, false};
+
 	// Passos de brush por pixel de movimento horizontal. O range completo do
 	// brush sao 300 passos de 0.010.
 	float brushResizeSensitivity = 1.0f;
 
 	std::vector<RemapEntry> remaps;
 
+	// [TooltipShortcuts] so ROTULA, nao liga tecla nenhuma. Existe para as
+	// teclas que o proprio Outfit Studio trata no codigo e que portanto nao
+	// aparecem em lugar nenhum que de para ler de fora -- os numeros que trocam
+	// de brush sao o caso tipico.
+	std::vector<RemapEntry> tooltipShortcuts;
+
+	MirrorPoseSigns mirrorSigns;
+
 	bool logFile = false;
 };
 
-// Le [Remap]. Entradas com hotkey invalida sao descartadas.
+// Le uma secao de linhas "xrcName=tecla". Entradas com hotkey invalida sao
+// descartadas: uma linha errada nao pode derrubar as outras.
+std::vector<RemapEntry> ReadKeySection(const wchar_t* iniPath, const wchar_t* section);
+
+// Le [Remap]. Atalho para ReadKeySection na secao de sempre.
 std::vector<RemapEntry> ReadRemapSection(const wchar_t* iniPath);
 
 // So a chave [Debug]/LogFile, para o log poder ser ligado ANTES de o resto do

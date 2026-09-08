@@ -144,3 +144,78 @@ TEST(ReadsTuningAndBrushKeys) {
 	DeleteFileW(bad.c_str());
 	return true;
 }
+
+TEST(NewFeaturesHaveTheRightDefaults) {
+	Config c = LoadConfig(TempPath(L"bsos_sem_arquivo_novo.ini").c_str());
+
+	TEST_ASSERT(c.shortcutTooltips);
+	TEST_ASSERT(c.symmetrizeSearch);
+	TEST_ASSERT(c.mirrorBonePose);
+	TEST_ASSERT(c.zeroSlidersHotkey);
+	TEST_ASSERT(c.zeroSliders.vk == 'Z' && !c.zeroSliders.shift && !c.zeroSliders.ctrl);
+
+	// A camera e a unica que comeca desligada: ela troca a navegacao que o
+	// usuario ja tem na mao, em vez de acrescentar alguma coisa.
+	TEST_ASSERT(!c.blenderCamera);
+
+	// Espelhar nega rotacao Y e Z e deslocamento X -- a convencao do esqueleto
+	// do Skyrim, onde X e o eixo que atravessa o corpo.
+	TEST_ASSERT(!c.mirrorSigns.rotationX);
+	TEST_ASSERT(c.mirrorSigns.rotationY);
+	TEST_ASSERT(c.mirrorSigns.rotationZ);
+	TEST_ASSERT(c.mirrorSigns.offsetX);
+	TEST_ASSERT(!c.mirrorSigns.offsetY);
+	TEST_ASSERT(!c.mirrorSigns.offsetZ);
+	TEST_ASSERT(!c.mirrorSigns.scale);
+
+	TEST_ASSERT(c.tooltipShortcuts.empty());
+	return true;
+}
+
+TEST(ReadsTheNewSections) {
+	std::wstring path = TempPath(L"bsos_novas_secoes.ini");
+	TEST_ASSERT(WriteIni(path,
+						 "[Features]\r\n"
+						 "BlenderCamera=1\r\n"
+						 "MirrorBonePose=0\r\n"
+						 "ShortcutTooltips=0\r\n"
+						 "[Hotkeys]\r\n"
+						 "ZeroSliders=Alt+Z\r\n"
+						 "[MirrorPose]\r\n"
+						 "NegateRotationX=1\r\n"
+						 "NegateRotationY=0\r\n"
+						 "NegateScale=1\r\n"
+						 "[TooltipShortcuts]\r\n"
+						 "btnInflateBrush=3\r\n"
+						 "btnDeflateBrush=4\r\n"
+						 "btnQuebrado=LIXO++\r\n"));
+
+	Config c = LoadConfig(path.c_str());
+	TEST_ASSERT(c.blenderCamera);
+	TEST_ASSERT(!c.mirrorBonePose);
+	TEST_ASSERT(!c.shortcutTooltips);
+	TEST_ASSERT(c.symmetrizeSearch); // ausente no arquivo => default
+	TEST_ASSERT(c.zeroSliders.vk == 'Z' && c.zeroSliders.alt && !c.zeroSliders.shift);
+
+	// Cada eixo e independente: mexer num nao pode arrastar os outros.
+	TEST_ASSERT(c.mirrorSigns.rotationX);
+	TEST_ASSERT(!c.mirrorSigns.rotationY);
+	TEST_ASSERT(c.mirrorSigns.rotationZ); // ausente => default
+	TEST_ASSERT(c.mirrorSigns.scale);
+
+	// [TooltipShortcuts] aceita digito, que e o caso de uso dela: as teclas de
+	// brush do Outfit Studio sao numeros. A linha invalida cai fora sozinha.
+	TEST_ASSERT(c.tooltipShortcuts.size() == 2);
+	TEST_ASSERT(c.tooltipShortcuts[0].xrcName == "btnInflateBrush");
+	TEST_ASSERT(c.tooltipShortcuts[0].key.vk == '3');
+	TEST_ASSERT(c.tooltipShortcuts[1].key.vk == '4');
+
+	// A secao generica e a de [Remap] leem do mesmo jeito, e uma nao invade a
+	// outra.
+	TEST_ASSERT(ReadKeySection(path.c_str(), L"TooltipShortcuts").size() == 2);
+	TEST_ASSERT(ReadKeySection(path.c_str(), L"Remap").empty());
+	TEST_ASSERT(ReadKeySection(path.c_str(), L"NaoExiste").empty());
+
+	DeleteFileW(path.c_str());
+	return true;
+}

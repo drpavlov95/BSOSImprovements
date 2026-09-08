@@ -25,6 +25,10 @@ UINT StateAtPath(HMENU bar, const std::vector<int>& path);
 // mnemonico, sem espaco nas pontas. Vazio para separador.
 std::wstring MenuTextAt(HMENU parent, int index);
 
+// Texto do item exatamente como o Windows o guarda: com o acelerador depois do
+// \t e com os & de mnemonico. E de onde sai o "Ctrl+Z" de "Undo\tCtrl+Z".
+std::wstring MenuRawTextAt(HMENU parent, int index);
+
 // As mesmas travessias, mas casando o rotulo antes de usar a posicao.
 //
 // A posicao do XRC vale enquanto ninguem mexer no menu. Um outro mod que insira
