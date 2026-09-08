@@ -72,6 +72,33 @@ TEST(ResolvesRealOutfitStudioMenuPaths) {
 	TEST_ASSERT(!transform.empty() && !normals.empty());
 	TEST_ASSERT(inc != dec);
 
+	// Os dois comandos que abrem o dialogo de simetria. Sao o que identifica
+	// esse dialogo: a busca so e instalada no que nascer enquanto um deles
+	// esta sendo tratado. Se estes nomes sumirem numa versao nova, a feature
+	// se desliga sozinha -- e este teste e o aviso.
+	MenuPath maskSym = ResolveMenuPath(xrc, "maskSymVert");
+	MenuPath sym = ResolveMenuPath(xrc, "symVert");
+	TEST_ASSERT(!maskSym.empty() && !sym.empty());
+	TEST_ASSERT(maskSym != sym);
+
+	// O menu View, onde entra o interruptor da camera do Blender. Aqui o
+	// caminho tem que ter UM nivel so: e um menu de topo, e a camera precisa
+	// dele para pegar o HMENU do popup e pendurar o item la dentro.
+	MenuPath view = ResolveMenuPath(xrc, "menuView");
+	TEST_ASSERT(view.size() == 1);
+
+	// E o menu de topo do View nao pode ser o mesmo do Slider, senao o item
+	// apareceria no lugar errado.
+	TEST_ASSERT(view[0] != imp[0]);
+
+	// Nomes de ferramenta que tambem existem como item de menu. E disso que o
+	// tooltip vive: o wx da o mesmo id aos dois, entao o acelerador lido do
+	// menu vale para o botao da barra.
+	TEST_ASSERT(!ResolveMenuPath(xrc, "btnPivot").empty());
+	TEST_ASSERT(!ResolveMenuPath(xrc, "btnVertexEdit").empty());
+	TEST_ASSERT(!ResolveMenuPath(xrc, "btnViewFront").empty());
+	TEST_ASSERT(!ResolveMenuPath(xrc, "btnInflateBrush").empty());
+
 	TEST_ASSERT(ResolveMenuPath(xrc, "naoExisteEsseNome").empty());
 	TEST_ASSERT(ResolveMenuPath(L"arquivo_que_falta.xrc", "sliderImportOBJ").empty());
 	return true;

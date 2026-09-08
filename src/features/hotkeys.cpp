@@ -7,10 +7,12 @@
 #include "core/host.h"
 #include "core/log.h"
 #include "core/ui_thread.h"
+#include "features/blender_camera.h"
 #include "features/brush_resize.h"
 #include "features/outfit_tree.h"
 #include "features/registry.h"
 #include "features/slider_menu.h"
+#include "features/zero_sliders.h"
 #include "win32/winfind.h"
 #include "xrcmap.h"
 
@@ -52,6 +54,10 @@ bool ActionExportSliderObj() {
 
 bool ActionImportSliderObj() {
 	return RunSliderCommand("import slider OBJ", g_sliderMenu.importObjId);
+}
+
+bool ActionZeroSliders() {
+	return ZeroSliders::Run();
 }
 
 bool ActionBeginBrushResize() {
@@ -131,6 +137,12 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 	}
 
+	// A camera reescreve a mensagem no lugar e nao a consome, entao ela nao
+	// tira nada do caminho dos atalhos abaixo. Fica de fora durante o resize de
+	// brush: la o modo e exclusivo e o mouse ja tem dono.
+	if (!BrushResize::IsActive())
+		BlenderCamera::RewriteMouseMessage(msg);
+
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
@@ -191,7 +203,14 @@ void InstallHookHere(void*) {
 }
 
 bool HotkeysEnabled(const Config& cfg) {
-	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag || !cfg.remaps.empty();
+	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
+		   cfg.blenderCamera || cfg.zeroSlidersHotkey || !cfg.remaps.empty();
+}
+
+// O BodySlide so tem uma tecla, e nao tem menubar nem view 3D. Tudo o mais que
+// este modulo faz e do Outfit Studio.
+bool HotkeysEnabledBodySlide(const Config& cfg) {
+	return cfg.zeroSlidersHotkey;
 }
 
 } // namespace
@@ -210,10 +229,16 @@ bool Install(HWND frame) {
 	g_frame = frame;
 	const Config& cfg = Cfg();
 
-	if (cfg.referenceHotkey)
+	// O mesmo modulo serve os dois programas, porque o hook de mensagens e o
+	// mesmo. Mas quase tudo aqui e do Outfit Studio: o BodySlide nao tem
+	// menubar, nem view 3D, nem shape tree. So a tecla de zerar sliders vale
+	// nos dois.
+	const bool outfitStudio = CurrentApp() == HostApp::OutfitStudio;
+
+	if (outfitStudio && cfg.referenceHotkey)
 		AddBinding(cfg.selectReference, "selecionar reference", ActionSelectReference);
 
-	if (cfg.sliderObjHotkeys) {
+	if (outfitStudio && cfg.sliderObjHotkeys) {
 		g_sliderMenu = ResolveSliderMenu(AppDir());
 		if (g_sliderMenu.ok) {
 			// Deixa registrado onde cada comando foi parar e como o menu esta
@@ -226,25 +251,34 @@ bool Install(HWND frame) {
 		}
 	}
 
-	if (cfg.brushResizeDrag && BrushResize::Install(frame))
+	if (outfitStudio && cfg.brushResizeDrag && BrushResize::Install(frame))
 		AddBinding(cfg.brushResize, "redimensionar brush", ActionBeginBrushResize);
+
+	const bool camera = outfitStudio && cfg.blenderCamera && BlenderCamera::Install(frame);
+
+	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))
+		AddBinding(cfg.zeroSliders, "zerar sliders", ActionZeroSliders);
 
 	// [Remap]: qualquer tecla ligada a qualquer comando de menu. Resolvido
 	// agora para nao pagar a leitura do XRC a cada tecla.
-	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	for (const RemapEntry& entry : cfg.remaps) {
-		MenuTrail path = ResolveMenuTrail(xrc.c_str(), entry.xrcName.c_str());
-		if (path.empty()) {
-			// Nome errado no INI nao pode derrubar os outros atalhos.
-			LogF("remap: '%s' nao existe no XRC, ignorado", entry.xrcName.c_str());
-			continue;
+	if (outfitStudio) {
+		const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
+		for (const RemapEntry& entry : cfg.remaps) {
+			MenuTrail path = ResolveMenuTrail(xrc.c_str(), entry.xrcName.c_str());
+			if (path.empty()) {
+				// Nome errado no INI nao pode derrubar os outros atalhos.
+				LogF("remap: '%s' nao existe no XRC, ignorado", entry.xrcName.c_str());
+				continue;
+			}
+			HWND frameCopy = frame;
+			AddBinding(entry.key, "remap " + entry.xrcName,
+					   [frameCopy, path]() { return InvokeMenuCommand(frameCopy, path); });
 		}
-		HWND frameCopy = frame;
-		AddBinding(entry.key, "remap " + entry.xrcName,
-				   [frameCopy, path]() { return InvokeMenuCommand(frameCopy, path); });
 	}
 
-	if (g_bindings.empty()) {
+	// A camera nao usa binding de tecla: ela reescreve mensagens de mouse. Sem
+	// esta parte, ligar so a camera nao instalaria o hook.
+	if (g_bindings.empty() && !camera) {
 		LogF("hotkeys: nenhum atalho configurado");
 		return false;
 	}
@@ -267,10 +301,18 @@ void Uninstall() {
 		g_hook = nullptr;
 	}
 	BrushResize::Uninstall();
+	BlenderCamera::Uninstall();
+	ZeroSliders::Uninstall();
 	g_bindings.clear();
 	g_frame = nullptr;
 }
 
 } // namespace Hotkeys
 
-BSOS_REGISTER_FEATURE(hotkeys, "hotkeys", HostApp::OutfitStudio, HotkeysEnabled, Hotkeys::Install, Hotkeys::Uninstall)
+// Registrado duas vezes de proposito, uma por aplicacao. O estado do modulo e
+// global, o que so vale porque cada processo e um programa so: o BodySlide e o
+// Outfit Studio sao executaveis separados, nunca dois hosts no mesmo processo.
+BSOS_REGISTER_FEATURE(hotkeys, "hotkeys", HostApp::OutfitStudio, HotkeysEnabled,
+					  Hotkeys::Install, Hotkeys::Uninstall)
+BSOS_REGISTER_FEATURE(hotkeys_bs, "hotkeys", HostApp::BodySlide, HotkeysEnabledBodySlide,
+					  Hotkeys::Install, Hotkeys::Uninstall)
