@@ -12,6 +12,7 @@
 #include "features/outfit_tree.h"
 #include "features/registry.h"
 #include "features/slider_menu.h"
+#include "features/stroke_stabilizer.h"
 #include "features/zero_sliders.h"
 #include "win32/winfind.h"
 #include "xrcmap.h"
@@ -145,11 +146,18 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 	}
 
-	// A camera reescreve a mensagem no lugar e nao a consome, entao ela nao
-	// tira nada do caminho dos atalhos abaixo. Fica de fora durante o resize de
+	// As duas reescrevem a mensagem no lugar e nao a consomem, entao nao tiram
+	// nada do caminho dos atalhos abaixo. Ficam de fora durante o resize de
 	// brush: la o modo e exclusivo e o mouse ja tem dono.
-	if (!BrushResize::IsActive())
+	//
+	// A camera vem primeiro porque ela pode trocar a IDENTIDADE da mensagem --
+	// botao do meio virando botao direito. O estabilizador so mexe em
+	// coordenada, e precisa ver a mensagem ja com o botao final: um traco de
+	// pincel e o botao esquerdo, e o que a camera produz nunca e esse.
+	if (!BrushResize::IsActive()) {
 		BlenderCamera::RewriteMouseMessage(msg);
+		StrokeStabilizer::RewriteStrokeMessage(msg);
+	}
 
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
@@ -212,7 +220,8 @@ void InstallHookHere(void*) {
 
 bool HotkeysEnabled(const Config& cfg) {
 	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
-		   cfg.blenderCamera || cfg.zeroSlidersHotkey || !cfg.remaps.empty();
+		   cfg.blenderCamera || cfg.zeroSlidersHotkey || cfg.stabilizerRadius > 0 ||
+		   !cfg.remaps.empty();
 }
 
 // O BodySlide so tem uma tecla, e nao tem menubar nem view 3D. Tudo o mais que
@@ -269,6 +278,7 @@ bool Install(HWND frame) {
 	}
 
 	const bool camera = outfitStudio && cfg.blenderCamera && BlenderCamera::Install(frame);
+	const bool stabilizer = outfitStudio && StrokeStabilizer::Install(frame);
 
 	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))
 		AddBinding(cfg.zeroSliders, "zerar sliders", ActionZeroSliders);
@@ -290,9 +300,10 @@ bool Install(HWND frame) {
 		}
 	}
 
-	// A camera nao usa binding de tecla: ela reescreve mensagens de mouse. Sem
-	// esta parte, ligar so a camera nao instalaria o hook.
-	if (g_bindings.empty() && !camera) {
+	// A camera e o estabilizador nao usam binding de tecla: eles reescrevem
+	// mensagens de mouse. Sem esta parte, ligar so um dos dois nao instalaria o
+	// hook e nenhum funcionaria.
+	if (g_bindings.empty() && !camera && !stabilizer) {
 		LogF("hotkeys: nenhum atalho configurado");
 		return false;
 	}
@@ -316,6 +327,7 @@ void Uninstall() {
 	}
 	BrushResize::Uninstall();
 	BlenderCamera::Uninstall();
+	StrokeStabilizer::Uninstall();
 	ZeroSliders::Uninstall();
 	g_bindings.clear();
 	g_frame = nullptr;

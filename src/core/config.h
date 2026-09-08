@@ -86,6 +86,12 @@ struct Config {
 	// brush mais fraco do que comecou. Por isso o default e conservador.
 	int brushStrengthSteps = 100;
 
+	// Raio da corda do estabilizador de traco, em pixels. Zero desliga.
+	//
+	// Comeca desligado pelo mesmo motivo da camera: ele nao acrescenta nada,
+	// ele muda como o pincel responde a mao de quem ja esta acostumado.
+	int stabilizerRadius = 0;
+
 	std::vector<RemapEntry> remaps;
 
 	// [TooltipShortcuts] so ROTULA, nao liga tecla nenhuma. Existe para as

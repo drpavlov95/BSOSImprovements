@@ -104,6 +104,17 @@ depends on how your skeleton orients each bone's local axes. The defaults are th
 convention. If a mirrored pose bends the wrong way, flip one line and reload; with the
 log on, the mod prints the values it wrote.
 
+**Stroke stabilizer** *(off by default)*. Blender's *Stabilize Stroke*: the brush hangs
+from the cursor on a rope. While the cursor moves *inside* that radius the brush does not
+move at all — which is where hand tremor dies, because tremor is small movement. Past the
+radius the cursor drags the brush along, always trailing by exactly that much.
+
+Set `[Tuning] StabilizerRadius` to something between 20 and 40 pixels to try it. It only
+acts during a stroke — left button held over the 3D view — and only when the tool in your
+hand is a brush; with the Select tool the left button moves the camera, and lagging that
+would be a defect rather than a help. The mod knows which tool is active by reading the
+check mark off the **Tool ▸ Current Tool** menu, which is a radio group.
+
 **Blender-style camera** *(off by default)*. The **middle** mouse button orbits and
 **Shift+middle** pans, like Blender. The right button keeps orbiting the way it always
 did, so nothing you already know stops working.

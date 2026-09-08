@@ -44,5 +44,13 @@ HMENU ContainerAtLabeledPath(HMENU bar, const std::vector<int>& path,
 							 const std::vector<std::wstring>& labels, int& outIndex);
 bool IsEnabledAtLabeledPath(HMENU bar, const std::vector<int>& path,
 							const std::vector<std::wstring>& labels);
+
+// Se o item esta marcado.
+//
+// Os itens de "Current Tool" sao de radio, entao a marca diz qual ferramenta
+// esta em uso agora. E a unica forma, de fora, de saber se o que esta na mao e
+// um pincel ou a ferramenta de selecao.
+bool IsCheckedAtLabeledPath(HMENU bar, const std::vector<int>& path,
+							const std::vector<std::wstring>& labels);
 UINT CommandIdAtLabeledPath(HMENU bar, const std::vector<int>& path,
 							const std::vector<std::wstring>& labels);

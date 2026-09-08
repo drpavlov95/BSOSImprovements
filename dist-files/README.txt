@@ -67,6 +67,13 @@ Outfit Studio
   because it depends on how your skeleton orients each bone; the defaults are
   the Skyrim convention.
 
+  Stroke stabilizer, OFF by default -- Blender's "Stabilize Stroke". The
+  brush hangs from the cursor on a rope of [Tuning] StabilizerRadius pixels.
+  While the cursor moves inside that radius the brush does not move at all,
+  which is where hand tremor dies. Try 20 to 40. It only acts during a
+  stroke, and only when the tool in your hand is a brush -- with the Select
+  tool the left button moves the camera.
+
   Blender-style camera, OFF by default. Middle mouse orbits, Shift+middle
   pans. The right button keeps orbiting as before. It ships off because it
   swaps navigation you already have in your hands rather than adding

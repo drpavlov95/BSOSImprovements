@@ -199,6 +199,22 @@ bool IsEnabledAtLabeledPath(HMENU bar, const std::vector<int>& path,
 	return container ? IsEnabledAt(container, index) : false;
 }
 
+bool IsCheckedAtLabeledPath(HMENU bar, const std::vector<int>& path,
+							const std::vector<std::wstring>& labels) {
+	int index = -1;
+	HMENU container = ContainerAtLabeledPath(bar, path, labels, index);
+	if (!container || index < 0)
+		return false;
+
+	MENUITEMINFOW info = {};
+	info.cbSize = sizeof(info);
+	info.fMask = MIIM_STATE;
+	if (!GetMenuItemInfoW(container, static_cast<UINT>(index), TRUE, &info))
+		return false;
+
+	return (info.fState & MFS_CHECKED) != 0;
+}
+
 UINT CommandIdAtLabeledPath(HMENU bar, const std::vector<int>& path,
 							const std::vector<std::wstring>& labels) {
 	int index = -1;
