@@ -1,7 +1,7 @@
 # BodySlide and OutfitStudio Improvements
 
-Six interface improvements for **BodySlide and Outfit Studio**, shipped as a standalone
-DLL. No original file is modified or redistributed.
+Interface improvements for **BodySlide and Outfit Studio**, shipped as a standalone DLL.
+No original file is modified or redistributed.
 
 ## What it does
 
@@ -23,6 +23,10 @@ outfits to build straight from the list control, so hiding rows would change wha
 built. Nothing is added or removed — only scrolled to — so your checkboxes are exactly
 what you set them to.
 
+**`Z` zeroes every slider.** One key puts the whole panel back to zero, instead of
+dragging each slider down by hand. There is no undo for it in BodySlide, so if you find
+yourself hitting it by accident, `Alt+Z` is one line away in the INI.
+
 ### Outfit Studio
 
 **The reference comes pre-selected.** When you load an outfit, Outfit Studio selects the
@@ -40,6 +44,7 @@ project **does not** touch your selection.
 | `Shift+I` | Import Slider Data ▸ Import OBJ |
 | `F` | Blender-style brush resize |
 | `K` | Transform (moved off `F`) |
+| `Z` | Zero every slider in the panel |
 
 **`Shift+E` and `Shift+I`** only fire while a slider is in **Edit mode** — the same
 condition Outfit Studio itself uses to enable those menu entries. Outside edit mode the
@@ -52,6 +57,48 @@ size without moving. Needs an active brush (keys `1`–`9`); with the Select too
 nothing.
 
 No shortcut fires while a text field has focus — typing "B" into a filter types a "b".
+
+**Tooltips say the shortcut.** Hovering a toolbar button now shows the key in
+parentheses — *"Shows a transform tool. **(K)**"*. The key is not hardcoded: it is read
+from the menu entry of the same command, which is why it survives translations and why
+it says `K` and not `F` once the `[Remap]` below has moved Transform out of the way.
+
+Tools whose key lives only inside Outfit Studio's own code — the digits that switch
+brushes — have nothing to read, so they show nothing. If you want them labelled anyway,
+list them under `[TooltipShortcuts]` in the INI. Turn the log on and the mod prints how
+many tools it found with and without a shortcut.
+
+**Search in the "Symmetrize Vertices" dialog.** That dialog (and its twin, "Mask
+Symmetric Vertices") lists one row per slider and one per bone, which on a real project
+is hundreds of rows. A search box at the top hides the rows that do not match.
+
+It only hides them: a row hidden by the filter **keeps its check mark**, the same
+contract as the Choose Groups search. Clearing the box brings everything back. The list
+closes its own gaps because the hiding is done in a way wxWidgets understands, so the
+scrollbar stays honest.
+
+**Mirror bone pose.** Move the right thigh in pose mode and the left one follows, by the
+same amount, with the sign flipped on the axes that mirror.
+
+It fires when you let go of the slider, not while you drag it. Mirroring works by
+switching the bone list to the other bone, writing there, and switching back — doing that
+on every mouse move would make the sliders jump under the cursor. Bones with no side
+(`NPC Root`, `Pelvis`, `NPC Spine`) are left alone, and so is any bone whose mirror is not
+in the list.
+
+Which axes flip is a `[MirrorPose]` setting, because there is no universal answer — it
+depends on how your skeleton orients each bone's local axes. The defaults are the Skyrim
+convention. If a mirrored pose bends the wrong way, flip one line and reload; with the
+log on, the mod prints the values it wrote.
+
+**Blender-style camera** *(off by default)*. The **middle** mouse button orbits and
+**Shift+middle** pans, like Blender. The right button keeps orbiting the way it always
+did, so nothing you already know stops working.
+
+This is the only feature that ships off, because it does not add anything — it swaps
+navigation you already have in your hands. Turn it on in the INI and a **Blender camera**
+entry appears at the end of the **View** menu, so you can flip it back and forth without
+restarting.
 
 ## Installation
 
@@ -110,6 +157,23 @@ btnRecalcNormals=N
 Command names come from `CalienteTools\BodySlide\res\xrc\OutfitStudio.xrc` — find the
 menu text and read the `name=` of the surrounding `<object>`.
 
+Two sections use that same vocabulary. `[TooltipShortcuts]` only *labels* a tooltip
+without binding anything, which is what the brush digits need since Outfit Studio handles
+those keys internally:
+
+```ini
+[TooltipShortcuts]
+btnInflateBrush=3
+```
+
+`[MirrorPose]` decides which axes flip when a pose is mirrored:
+
+```ini
+[MirrorPose]
+NegateRotationY=1
+NegateOffsetX=1
+```
+
 ## Compatibility
 
 - **Verified against 5.8.2**, and developed originally against 5.6.3. Nothing here
@@ -117,9 +181,11 @@ menu text and read the `name=` of the surrounding `<object>`.
   newer versions should keep working — including 5.8.0, which renamed the executables. If
   something cannot be found on a newer build, that piece disables itself silently instead
   of breaking the program.
-- **Dark mode (added in 5.8.2) is not followed by the two dialogs this mod draws itself**
-  — the Choose Groups replacement and the Batch Build search box use standard Windows
-  colours. Everything works; it just looks light against a dark BodySlide.
+- **Dark mode is followed.** 5.8.2 added a light/dark setting, and everything this mod
+  draws itself follows it: the Choose Groups replacement and the Batch Build and
+  Symmetrize search boxes read `AppearanceMode` from BodySlide's own `Config.xml`, so
+  they match whatever you picked in Settings — including `System`, which tracks the
+  Windows theme.
 - **Works alongside other mods that use `version.dll`**, such as draping mods. This one
   deliberately uses the `msimg32.dll` slot instead.
 - BodySlide translations are supported: nothing is identified by interface text.

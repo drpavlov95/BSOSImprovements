@@ -1,7 +1,7 @@
 BodySlide and OutfitStudio Improvements
 =======================================
 
-Six interface improvements for BodySlide and Outfit Studio.
+Interface improvements for BodySlide and Outfit Studio.
 Nothing in the original install is modified or replaced.
 
 
@@ -20,6 +20,9 @@ BodySlide
   itself, so hiding rows would change the result. Your checkboxes are left
   exactly as you set them.
 
+  Z zeroes every slider in the panel at once. There is no undo for this in
+  BodySlide -- if you keep hitting it by accident, set ZeroSliders=Alt+Z.
+
 Outfit Studio
   Loading a project selects the reference shape (green, bold) instead of the
   first mesh in the list.
@@ -29,10 +32,35 @@ Outfit Studio
   Shift+I    Import Slider Data > Import OBJ    (needs a slider in Edit mode)
   F          Blender-style brush resize
   K          Transform (moved off F)
+  Z          zero every slider in the panel
 
   F: press it, move the mouse sideways to grow or shrink the circle, left
   click to confirm. Esc or right click cancels. The circle stays put while
   you drag. Needs an active brush (keys 1-9).
+
+  Toolbar tooltips now say the shortcut in parentheses -- "Shows a transform
+  tool. (K)". The key is read from the matching menu entry, so it follows
+  translations and stays right after a [Remap]. Buttons whose key lives only
+  inside Outfit Studio's code -- the digits that switch brushes -- show
+  nothing; label them yourself under [TooltipShortcuts] if you want them.
+
+  A search box in the "Symmetrize Vertices" dialog (and in its twin, "Mask
+  Symmetric Vertices"), which lists one row per slider and one per bone. The
+  filter only hides rows: a hidden row keeps its check mark, and clearing the
+  box brings everything back.
+
+  Mirror bone pose. Move the right thigh in pose mode and the left one
+  follows, same amount, sign flipped on the axes that mirror. It happens when
+  you release the slider, not while dragging. Bones with no side -- Root,
+  Pelvis, NPC Spine -- are left alone. Which axes flip is set in [MirrorPose],
+  because it depends on how your skeleton orients each bone; the defaults are
+  the Skyrim convention.
+
+  Blender-style camera, OFF by default. Middle mouse orbits, Shift+middle
+  pans. The right button keeps orbiting as before. It ships off because it
+  swaps navigation you already have in your hands rather than adding
+  anything. Set BlenderCamera=1 and a "Blender camera" entry appears at the
+  end of the View menu, so you can flip it without restarting.
 
 
 INSTALL
@@ -91,6 +119,18 @@ reference on R instead, for example:
 
 Command names come from CalienteTools\BodySlide\res\xrc\OutfitStudio.xrc.
 
+Two other sections use those same names. [TooltipShortcuts] only labels a
+tooltip without binding anything, which is what the brush digits need:
+
+  [TooltipShortcuts]
+  btnInflateBrush=3
+
+[MirrorPose] decides which axes flip when a pose is mirrored:
+
+  [MirrorPose]
+  NegateRotationY=1
+  NegateOffsetX=1
+
 
 COMPATIBILITY
 -------------
@@ -100,10 +140,10 @@ memory addresses or byte signatures -- only on standard Windows messages -- so
 other versions should work. Anything that cannot be found disables itself
 instead of breaking the program.
 
-Dark mode, added in 5.8.2, is not followed by the two dialogs this mod draws
-itself: the Choose Groups replacement and the Batch Build search box use
-standard Windows colours. They work, they just look light against a dark
-BodySlide.
+Dark mode is followed. 5.8.2 added a light/dark setting, and everything this
+mod draws itself reads AppearanceMode from BodySlide's own Config.xml, so it
+matches what you picked in Settings -- including "System", which tracks the
+Windows theme.
 
 Works alongside mods that use version.dll, such as draping mods; this one uses
 the msimg32.dll slot. BodySlide translations are supported: nothing is matched
