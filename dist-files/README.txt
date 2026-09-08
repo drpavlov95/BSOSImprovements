@@ -31,12 +31,23 @@ Outfit Studio
   Shift+E    Export Slider Data > Export OBJ    (needs a slider in Edit mode)
   Shift+I    Import Slider Data > Import OBJ    (needs a slider in Edit mode)
   F          Blender-style brush resize
+  Shift+F    Blender-style brush strength
   K          Transform (moved off F)
   Z          zero every slider in the panel
 
   F: press it, move the mouse sideways to grow or shrink the circle, left
   click to confirm. Esc or right click cancels. The circle stays put while
   you drag. Needs an active brush (keys 1-9).
+
+  Shift+F: the same drag for strength. The circle does not change, because
+  strength is not a size -- the value shows in the status bar.
+
+  How many steps strength has is a guess in [Tuning] BrushStrengthSteps,
+  default 100, because that number is not written in any file the mod can
+  read. Too high is the harmful direction: steps past the end are ignored by
+  the program but still counted, so cancelling would leave the brush weaker
+  than it started. Turn the log on and press Shift+F once -- the mod dumps
+  the status bar panels and one of them carries the strength.
 
   Toolbar tooltips now say the shortcut in parentheses -- "Shows a transform
   tool. (K)". The key is read from the matching menu entry, so it follows

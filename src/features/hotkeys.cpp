@@ -60,13 +60,21 @@ bool ActionZeroSliders() {
 	return ZeroSliders::Run();
 }
 
-bool ActionBeginBrushResize() {
+bool BeginBrushDrag(BrushResize::Target target) {
 	if (BrushResize::IsActive())
 		return true; // ja no modo: engole a tecla repetida
 	POINT cursor = {};
 	GetCursorPos(&cursor);
-	BrushResize::Begin(cursor.x, cursor.y);
+	BrushResize::Begin(cursor.x, cursor.y, target);
 	return true;
+}
+
+bool ActionBeginBrushResize() {
+	return BeginBrushDrag(BrushResize::Target::Size);
+}
+
+bool ActionBeginBrushStrength() {
+	return BeginBrushDrag(BrushResize::Target::Strength);
 }
 
 // Registra evitando conflito: a primeira entrada com uma dada tecla vence.
@@ -251,8 +259,14 @@ bool Install(HWND frame) {
 		}
 	}
 
-	if (outfitStudio && cfg.brushResizeDrag && BrushResize::Install(frame))
+	if (outfitStudio && cfg.brushResizeDrag && BrushResize::Install(frame)) {
 		AddBinding(cfg.brushResize, "redimensionar brush", ActionBeginBrushResize);
+
+		// A forca so entra se os comandos dela existirem. Ligar a tecla sem
+		// eles daria um arrasto que engole o mouse e nao muda nada.
+		if (BrushResize::Supports(BrushResize::Target::Strength))
+			AddBinding(cfg.brushStrength, "forca do brush", ActionBeginBrushStrength);
+	}
 
 	const bool camera = outfitStudio && cfg.blenderCamera && BlenderCamera::Install(frame);
 

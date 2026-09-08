@@ -15,12 +15,13 @@
 
 namespace {
 
-// O range do brush sao 300 passos de 0.010 (LimitBrushSize em OutfitStudio.h).
-// Passar disso so gera comandos que o Outfit Studio ignora, e faria o cancelar
-// devolver o brush para longe do tamanho original.
-constexpr int kMaxSteps = 300;
+// O range do tamanho sao 300 passos de 0.010 (LimitBrushSize em
+// OutfitStudio.h). Passar disso so gera comandos que o Outfit Studio ignora, e
+// faria o cancelar devolver o brush para longe do tamanho original.
+constexpr int kMaxSizeSteps = 300;
 
 bool g_active = false;
+BrushResize::Target g_target = BrushResize::Target::Size;
 int g_anchorScreenX = 0;
 int g_anchorScreenY = 0;
 int g_applied = 0;
@@ -35,6 +36,34 @@ POINT g_anchorClient = {}; // a ancora em coordenadas do canvas
 // confiavel: a leitura funcionava na inicializacao e devolvia zero depois.
 UINT g_increaseId = 0;
 UINT g_decreaseId = 0;
+UINT g_increaseStrId = 0;
+UINT g_decreaseStrId = 0;
+
+bool IsStrength() {
+	return g_target == BrushResize::Target::Strength;
+}
+
+UINT IncreaseId() {
+	return IsStrength() ? g_increaseStrId : g_increaseId;
+}
+
+UINT DecreaseId() {
+	return IsStrength() ? g_decreaseStrId : g_decreaseId;
+}
+
+// Quantos passos a grandeza em curso tem.
+//
+// O do tamanho vem do proprio Outfit Studio. O da forca nao esta escrito em
+// recurso nenhum -- o popup do Space e construido em codigo -- entao ele e
+// configuravel, e o log registra o valor lido da barra de status no inicio e no
+// fim de cada arrasto, que e como se descobre o numero certo sem adivinhar.
+int MaxSteps() {
+	return IsStrength() ? Cfg().brushStrengthSteps : kMaxSizeSteps;
+}
+
+const char* TargetName() {
+	return IsStrength() ? "forca" : "tamanho";
+}
 
 HWND g_statusBar = nullptr;
 volatile LONG g_paintCount = 0;
@@ -50,6 +79,27 @@ std::wstring ReadRadius() {
 	wchar_t text[128] = {};
 	SendMessageW(g_statusBar, SB_GETTEXTW, 2, reinterpret_cast<LPARAM>(text));
 	return text[0] ? std::wstring(text) : std::wstring(L"(vazio)");
+}
+
+// Despeja todos os paineis da barra de status.
+//
+// Serve para descobrir ONDE o Outfit Studio escreve a forca. O painel 2 e o do
+// raio, e isso se sabe; o da forca nao esta documentado em lugar nenhum que de
+// para ler. Uma linha por arrasto de forca no log resolve a duvida sem
+// adivinhacao, e e o que permite acertar BrushStrengthSteps.
+void LogAllStatusPanels() {
+	if (!g_statusBar || !IsWindow(g_statusBar)) {
+		LogF("brush forca: sem barra de status para ler o valor");
+		return;
+	}
+
+	const int panels = static_cast<int>(SendMessageW(g_statusBar, SB_GETPARTS, 0, 0));
+	for (int i = 0; i < panels && i < 8; ++i) {
+		wchar_t text[128] = {};
+		SendMessageW(g_statusBar, SB_GETTEXTW, static_cast<WPARAM>(i),
+					 reinterpret_cast<LPARAM>(text));
+		LogF("brush forca: painel %d = '%ls'", i, text);
+	}
 }
 
 void ExitBecauseCaptureLost();
@@ -80,7 +130,7 @@ void ApplySteps(int steps) {
 	if (steps == 0)
 		return;
 
-	const UINT id = (steps > 0) ? g_increaseId : g_decreaseId;
+	const UINT id = (steps > 0) ? IncreaseId() : DecreaseId();
 	if (id == 0)
 		return;
 
@@ -113,7 +163,7 @@ void ExitBecauseCaptureLost() {
 	if (!g_active)
 		return;
 	g_active = false;
-	LogF("brush resize: captura perdida, modo encerrado (%+d passos mantidos)", g_applied);
+	LogF("brush %s: captura perdida, modo encerrado (%+d passos mantidos)", TargetName(), g_applied);
 	g_applied = 0;
 }
 
@@ -133,15 +183,15 @@ void Redraw() {
 
 } // namespace
 
-int StepsToApply(int deltaPixels, float sensitivity, int alreadyApplied) {
-	if (sensitivity <= 0.0f)
+int StepsToApply(int deltaPixels, float sensitivity, int alreadyApplied, int maxSteps) {
+	if (sensitivity <= 0.0f || maxSteps <= 0)
 		return 0;
 
 	long target = std::lround(static_cast<double>(deltaPixels) * sensitivity);
-	if (target > kMaxSteps)
-		target = kMaxSteps;
-	else if (target < -kMaxSteps)
-		target = -kMaxSteps;
+	if (target > maxSteps)
+		target = maxSteps;
+	else if (target < -maxSteps)
+		target = -maxSteps;
 
 	return static_cast<int>(target) - alreadyApplied;
 }
@@ -168,6 +218,14 @@ bool Install(HWND frame) {
 		LogF("brush_resize: nao consegui ler os ids (aumentar=%u diminuir=%u)", g_increaseId, g_decreaseId);
 		return false;
 	}
+
+	// A forca e opcional: se ela nao resolver, o tamanho continua funcionando e
+	// so a tecla dela deixa de ser ligada.
+	g_increaseStrId = MenuCommandId(frame, ResolveMenuTrail(xrc.c_str(), "btnIncreaseStr"));
+	g_decreaseStrId = MenuCommandId(frame, ResolveMenuTrail(xrc.c_str(), "btnDecreaseStr"));
+	if (g_increaseStrId == 0 || g_decreaseStrId == 0)
+		LogF("brush_resize: sem os comandos de forca (aumentar=%u diminuir=%u), so o tamanho",
+			 g_increaseStrId, g_decreaseStrId);
 
 	// A view 3D e um wxGLCanvas. Fixar o handle aqui evita depender de qual
 	// janela esta sob o mouse durante o arrasto.
@@ -216,14 +274,23 @@ void Uninstall() {
 	g_canvas = nullptr;
 	g_increaseId = 0;
 	g_decreaseId = 0;
+	g_increaseStrId = 0;
+	g_decreaseStrId = 0;
 }
 
 bool IsActive() {
 	return g_active;
 }
 
-void Begin(int anchorScreenX, int anchorScreenY) {
+bool Supports(Target target) {
+	if (target == Target::Strength)
+		return g_increaseStrId != 0 && g_decreaseStrId != 0;
+	return g_increaseId != 0 && g_decreaseId != 0;
+}
+
+void Begin(int anchorScreenX, int anchorScreenY, Target target) {
 	g_active = true;
+	g_target = target;
 	g_anchorScreenX = anchorScreenX;
 	g_anchorScreenY = anchorScreenY;
 	g_applied = 0;
@@ -241,15 +308,17 @@ void Begin(int anchorScreenX, int anchorScreenY) {
 	}
 
 	g_paintCount = 0;
-	LogF("brush resize: modo ligado (ancora tela %d,%d -> canvas %ld,%ld, %ls)",
+	LogF("brush %s: modo ligado (ancora tela %d,%d -> canvas %ld,%ld, %ls)", TargetName(),
 		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y, ReadRadius().c_str());
+	if (IsStrength())
+		LogAllStatusPanels();
 }
 
 void RewriteMouseMove(MSG* msg) {
 	if (!g_active || !msg)
 		return;
 
-	const int steps = StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied);
+	const int steps = StepsToApply(msg->pt.x - g_anchorScreenX, Cfg().brushResizeSensitivity, g_applied, MaxSteps());
 	if (steps != 0)
 		ApplySteps(steps);
 
@@ -283,7 +352,7 @@ void Confirm() {
 		ReleaseCapture();
 	// Um resumo por arrasto, nao um por movimento: cada LogF abre e fecha o
 	// arquivo, e um arrasto gera centenas de mensagens.
-	LogF("brush resize: confirmado (%+d passos, %ls, %ld repaints)", g_applied,
+	LogF("brush %s: confirmado (%+d passos, %ls, %ld repaints)", TargetName(), g_applied,
 		 ReadRadius().c_str(), g_paintCount);
 	g_applied = 0;
 	Redraw();
@@ -296,7 +365,7 @@ void Cancel() {
 	g_active = false;
 	if (GetCapture() == g_canvas)
 		ReleaseCapture();
-	LogF("brush resize: cancelado, tamanho restaurado");
+	LogF("brush %s: cancelado, valor restaurado", TargetName());
 	g_applied = 0;
 	Redraw();
 }

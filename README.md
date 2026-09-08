@@ -43,6 +43,7 @@ project **does not** touch your selection.
 | `Shift+E` | Export Slider Data ▸ Export OBJ |
 | `Shift+I` | Import Slider Data ▸ Import OBJ |
 | `F` | Blender-style brush resize |
+| `Shift+F` | Blender-style brush strength |
 | `K` | Transform (moved off `F`) |
 | `Z` | Zero every slider in the panel |
 
@@ -55,6 +56,18 @@ grow or shrink the circle, left click to confirm. `Esc` or right click cancels a
 restores the previous size. The cursor stays pinned while you drag, so the brush changes
 size without moving. Needs an active brush (keys `1`–`9`); with the Select tool it does
 nothing.
+
+**`Shift+F` is the same drag for brush *strength*** — the other half of what Blender puts
+on those two keys. The circle does not change while you drag it, because strength is not
+a size; the value shows in the status bar instead.
+
+One number here is a guess and is meant to be corrected: how many steps strength has from
+end to end. The size has 300 and that is in Outfit Studio's own code, but strength is not
+written in any resource the mod can read, so it lives in `[Tuning] BrushStrengthSteps`
+with a deliberately low default of 100. Too high is the harmful direction — steps past
+the end are ignored by the program but still counted here, so cancelling would apply them
+back and leave the brush weaker than it started. Turn the log on and press `Shift+F` once:
+the mod dumps the status bar panels, and one of them carries the strength.
 
 No shortcut fires while a text field has focus — typing "B" into a filter types a "b".
 

@@ -65,13 +65,26 @@ struct Config {
 	Hotkey importSliderObj = Hotkey{'I', true, false, false};
 	Hotkey brushResize = Hotkey{'F', false, false, false};
 
+	// Shift+F e a tecla do Blender para forca, e esta livre no Outfit Studio:
+	// os Shift+ que ele usa sao os numeros, R, N, B e os sinais.
+	Hotkey brushStrength = Hotkey{'F', true, false, false};
+
 	// Z esta livre nos dois programas: o menu do Outfit Studio so usa Ctrl+Z, e
 	// o BodySlide nao tem atalho nenhum.
 	Hotkey zeroSliders = Hotkey{'Z', false, false, false};
 
 	// Passos de brush por pixel de movimento horizontal. O range completo do
-	// brush sao 300 passos de 0.010.
+	// tamanho sao 300 passos de 0.010.
 	float brushResizeSensitivity = 1.0f;
+
+	// Quantos passos a forca tem de ponta a ponta.
+	//
+	// O do tamanho esta no codigo do Outfit Studio e vale 300; o da forca nao
+	// aparece em recurso nenhum, entao fica aqui. Errar para MAIS e o que
+	// importa: passar do fim gera comandos que o programa ignora, e ai o
+	// cancelar aplicaria de volta passos que nunca surtiram efeito, deixando o
+	// brush mais fraco do que comecou. Por isso o default e conservador.
+	int brushStrengthSteps = 100;
 
 	std::vector<RemapEntry> remaps;
 

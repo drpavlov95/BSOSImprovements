@@ -180,6 +180,7 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.exportSliderObj = ReadHotkey(iniPath, L"ExportSliderOBJ", c.exportSliderObj);
 	c.importSliderObj = ReadHotkey(iniPath, L"ImportSliderOBJ", c.importSliderObj);
 	c.brushResize = ReadHotkey(iniPath, L"BrushResize", c.brushResize);
+	c.brushStrength = ReadHotkey(iniPath, L"BrushStrength", c.brushStrength);
 	c.zeroSliders = ReadHotkey(iniPath, L"ZeroSliders", c.zeroSliders);
 
 	c.mirrorSigns.rotationX = ReadBool(iniPath, L"MirrorPose", L"NegateRotationX", c.mirrorSigns.rotationX);
@@ -191,6 +192,13 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.mirrorSigns.scale = ReadBool(iniPath, L"MirrorPose", L"NegateScale", c.mirrorSigns.scale);
 
 	c.brushResizeSensitivity = ReadFloat(iniPath, L"Tuning", L"BrushResizeSensitivity", c.brushResizeSensitivity);
+
+	// Valor sem sentido cai no default em vez de desligar o arrasto: um teto
+	// zero ou negativo faria a forca nunca sair do lugar.
+	const int strengthSteps = GetPrivateProfileIntW(L"Tuning", L"BrushStrengthSteps",
+													c.brushStrengthSteps, iniPath);
+	if (strengthSteps > 0)
+		c.brushStrengthSteps = strengthSteps;
 	c.remaps = ReadRemapSection(iniPath);
 	c.tooltipShortcuts = ReadKeySection(iniPath, L"TooltipShortcuts");
 

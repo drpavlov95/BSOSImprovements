@@ -169,6 +169,41 @@ TEST(NewFeaturesHaveTheRightDefaults) {
 	TEST_ASSERT(!c.mirrorSigns.scale);
 
 	TEST_ASSERT(c.tooltipShortcuts.empty());
+
+	// Shift+F para forca, a mesma tecla do Blender, e um teto conservador: o
+	// numero de passos da forca nao esta escrito em recurso nenhum do Outfit
+	// Studio, e errar para mais faria o cancelar deixar o brush mais fraco.
+	TEST_ASSERT(c.brushStrength.vk == 'F' && c.brushStrength.shift);
+	TEST_ASSERT(!c.brushStrength.ctrl && !c.brushStrength.alt);
+	TEST_ASSERT(c.brushStrengthSteps == 100);
+
+	// E ela nao pode colidir com a do tamanho, senao a segunda seria descartada
+	// no registro por conflito de tecla.
+	TEST_ASSERT(c.brushStrength.shift != c.brushResize.shift);
+	return true;
+}
+
+TEST(ReadsTheBrushStrengthTuning) {
+	std::wstring path = TempPath(L"bsos_forca.ini");
+	TEST_ASSERT(WriteIni(path,
+						 "[Hotkeys]\r\nBrushStrength=Ctrl+G\r\n"
+						 "[Tuning]\r\nBrushStrengthSteps=250\r\n"));
+
+	Config c = LoadConfig(path.c_str());
+	TEST_ASSERT(c.brushStrength.vk == 'G' && c.brushStrength.ctrl && !c.brushStrength.shift);
+	TEST_ASSERT(c.brushStrengthSteps == 250);
+
+	// Teto sem sentido cai no default em vez de desligar o arrasto: com zero
+	// ou negativo a forca nunca sairia do lugar.
+	std::wstring bad = TempPath(L"bsos_forca_ruim.ini");
+	TEST_ASSERT(WriteIni(bad, "[Tuning]\r\nBrushStrengthSteps=0\r\n"));
+	TEST_ASSERT(LoadConfig(bad.c_str()).brushStrengthSteps == 100);
+
+	TEST_ASSERT(WriteIni(bad, "[Tuning]\r\nBrushStrengthSteps=-5\r\n"));
+	TEST_ASSERT(LoadConfig(bad.c_str()).brushStrengthSteps == 100);
+
+	DeleteFileW(path.c_str());
+	DeleteFileW(bad.c_str());
 	return true;
 }
 
