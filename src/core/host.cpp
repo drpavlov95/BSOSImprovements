@@ -8,7 +8,6 @@
 namespace {
 
 HMODULE g_self = nullptr;
-HANDLE g_thread = nullptr;
 HostApp g_app = HostApp::Unknown;
 Config g_config;
 HWND g_frame = nullptr;
@@ -141,9 +140,39 @@ HostApp DetectApp(const wchar_t* exePath) {
 
 void HostStartup(HMODULE self) {
 	g_self = self;
-	g_thread = CreateThread(nullptr, 0, BootstrapThread, nullptr, 0, nullptr);
+
+	// Prende o modulo ao processo antes de criar a thread.
+	//
+	// A thread de bootstrap continua rodando depois que o DllMain retorna, e o
+	// codigo que ela executa e o DESTE modulo. Um FreeLibrary tira esse codigo
+	// do lugar embaixo dela, e a thread morre num endereco que nao existe mais.
+	// O BodySlide nunca faz isso -- o import e estatico -- mas um teste ou um
+	// gerenciador de mods que sonde o arquivo faz, e o processo cai.
+	//
+	// Esperar pela thread no HostShutdown nao resolveria: ele roda sob o loader
+	// lock, onde bloquear e a receita conhecida de travar o processo inteiro.
+	// Prender e a forma suportada, e nao muda nada na pratica: um DLL importado
+	// estaticamente ja fica carregado ate o fim do processo.
+	HMODULE pinned = nullptr;
+	if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+							reinterpret_cast<LPCWSTR>(self), &pinned))
+		return; // sem a garantia, nem comeca: uma thread orfa e pior que nada
+
+	// Sem join em lugar nenhum, entao guardar o handle so o vazaria. A thread
+	// segue viva depois do CloseHandle.
+	if (HANDLE thread = CreateThread(nullptr, 0, BootstrapThread, nullptr, 0, nullptr))
+		CloseHandle(thread);
 }
 
+// Na pratica isto nao roda mais.
+//
+// O DllMain so chama aqui quando reserved == nullptr, que e o descarregamento
+// explicito -- e o modulo esta preso desde o HostStartup, entao ele nunca e
+// descarregado. No fim do processo o Windows passa reserved != nullptr e este
+// caminho e pulado de proposito.
+//
+// Fica de pe porque as features precisam saber se desfazer de qualquer jeito: e
+// por aqui que os testes as desinstalam.
 void HostShutdown() {
 	if (!g_installed)
 		return;
