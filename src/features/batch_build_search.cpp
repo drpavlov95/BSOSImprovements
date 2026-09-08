@@ -6,6 +6,7 @@
 
 #include "core/host.h"
 #include "core/log.h"
+#include "core/theme.h"
 #include "core/ui_thread.h"
 #include "features/group_search.h" // MatchesFilter
 #include "features/registry.h"
@@ -45,6 +46,7 @@ HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 HWND g_dialog = nullptr;
 HWND g_list = nullptr;
+bool g_dark = false;
 HWND g_edit = nullptr; // guardado por handle, nao buscado por id: se o id
 					   // batesse com o de algum controle do XRC, GetDlgItem
 					   // devolveria o controle errado
@@ -188,6 +190,16 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			}
 			break;
 
+		// So a NOSSA caixa. O wx cuida dos controles dele, e responder por eles
+		// aqui atropelaria o tema que ele mesmo aplica.
+		case WM_CTLCOLOREDIT:
+			if (g_dark && reinterpret_cast<HWND>(lParam) == g_edit) {
+				SetTextColor(reinterpret_cast<HDC>(wParam), kDarkText);
+				SetBkColor(reinterpret_cast<HDC>(wParam), kDarkControlBackground);
+				return reinterpret_cast<LRESULT>(EditBackgroundBrush());
+			}
+			break;
+
 		case WM_SHOWWINDOW:
 		case WM_SIZE: {
 			// Deixa o wx posicionar primeiro, depois reserva a faixa.
@@ -228,6 +240,13 @@ void AddSearchControls(HWND dlg) {
 		SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 	SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search outfits..."));
 	SetWindowSubclass(edit, EditSubclassProc, kEditSubclassId, 0);
+
+	// O dialogo e do wx e ja segue o modo escuro; esta caixa e Win32 cru e
+	// ficaria branca no meio dele.
+	g_dark = DetectAppearance(AppDir()) == Appearance::Dark;
+	if (g_dark)
+		ApplyDarkControlTheme(edit, true);
+
 	g_edit = edit;
 }
 

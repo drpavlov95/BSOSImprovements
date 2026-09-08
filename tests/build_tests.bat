@@ -27,7 +27,7 @@ if exist src\xrcmap.cpp set SRC=!SRC! src\xrcmap.cpp
 cl /nologo /O2 /MT /EHsc /std:c++17 /W4 /DUNICODE /D_UNICODE /DBSOS_TESTS ^
    /I src /Fo:build\tests\ /Fe:build\tests\tests.exe ^
    !SRC! ^
-   /link user32.lib gdi32.lib comctl32.lib shlwapi.lib
+   /link user32.lib gdi32.lib comctl32.lib shlwapi.lib uxtheme.lib advapi32.lib
 if errorlevel 1 (
     echo.
     echo ERRO: compilacao dos testes falhou.

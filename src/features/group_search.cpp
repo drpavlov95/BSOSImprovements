@@ -7,6 +7,7 @@
 
 #include "core/host.h"
 #include "core/log.h"
+#include "core/theme.h"
 #include "core/ui_thread.h"
 #include "features/registry.h"
 #include "win32/winfind.h"
@@ -240,6 +241,31 @@ void CenterOnOwner(HWND dlg) {
 	SetWindowPos(dlg, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+bool g_dark = false;
+
+// Cores do dialogo e dos controles, quando o BodySlide esta no modo escuro.
+//
+// As mensagens WM_CTLCOLOR* cuidam do fundo e do texto que desenhamos; o
+// SetWindowTheme cuida do que o proprio Windows desenha dentro dos controles --
+// barra de rolagem da lista, borda da caixa de texto, moldura dos botoes.
+void ApplyDarkModeIfNeeded(HWND dlg, HWND list) {
+	g_dark = DetectAppearance(AppDir()) == Appearance::Dark;
+	LogF("group_search: dialogo em modo %s", g_dark ? "escuro" : "claro");
+	if (!g_dark)
+		return;
+
+	ApplyDarkControlTheme(list, false);
+	ApplyDarkControlTheme(GetDlgItem(dlg, kIdSearch), true);
+	for (int id : {kIdCheckVisible, kIdClearAll, IDOK, IDCANCEL})
+		ApplyDarkControlTheme(GetDlgItem(dlg, id), false);
+
+	// A list view desenha o proprio fundo, entao ela nao passa por
+	// WM_CTLCOLOR -- as cores vao direto nela.
+	ListView_SetBkColor(list, kDarkControlBackground);
+	ListView_SetTextBkColor(list, kDarkControlBackground);
+	ListView_SetTextColor(list, kDarkText);
+}
+
 INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 		case WM_INITDIALOG: {
@@ -253,11 +279,32 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
 			col.cx = rc.right - rc.left - GetSystemMetrics(SM_CXVSCROLL) - 4;
 			ListView_InsertColumn(list, 0, &col);
 
+			ApplyDarkModeIfNeeded(dlg, list);
+
 			CenterOnOwner(dlg);
 			RefreshList(dlg);
 			SetFocus(GetDlgItem(dlg, kIdSearch));
 			return FALSE; // ja definimos o foco
 		}
+
+		// Sem isto o dialogo fica branco dentro de um BodySlide escuro: o fundo
+		// padrao de dialogo e COLOR_3DFACE, que nao acompanha o modo escuro.
+		case WM_CTLCOLORDLG:
+		case WM_CTLCOLORSTATIC:
+		case WM_CTLCOLORBTN:
+			if (!g_dark)
+				break;
+			SetTextColor(reinterpret_cast<HDC>(wParam), kDarkText);
+			SetBkColor(reinterpret_cast<HDC>(wParam), kDarkBackground);
+			SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+			return reinterpret_cast<INT_PTR>(DarkBackgroundBrush());
+
+		case WM_CTLCOLOREDIT:
+			if (!g_dark)
+				break;
+			SetTextColor(reinterpret_cast<HDC>(wParam), kDarkText);
+			SetBkColor(reinterpret_cast<HDC>(wParam), kDarkControlBackground);
+			return reinterpret_cast<INT_PTR>(EditBackgroundBrush());
 
 		case WM_COMMAND:
 			switch (LOWORD(wParam)) {

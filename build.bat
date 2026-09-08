@@ -26,7 +26,7 @@ REM /MT: CRT estatico, para o DLL nao depender de redistribuiveis do usuario.
 cl /nologo /LD /O2 /MT /EHsc /std:c++17 /W4 /DUNICODE /D_UNICODE ^
    /I src /Fo:build\dll\ /Fe:dist\msimg32.dll ^
    !SRC! ^
-   /link /DEF:src\msimg32.def user32.lib gdi32.lib comctl32.lib shlwapi.lib
+   /link /DEF:src\msimg32.def user32.lib gdi32.lib comctl32.lib shlwapi.lib uxtheme.lib advapi32.lib
 if errorlevel 1 (
     echo.
     echo ERRO: compilacao falhou.
