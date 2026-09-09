@@ -52,6 +52,10 @@ struct Config {
 	bool mirrorBonePose = true;
 	bool zeroSlidersHotkey = true;
 
+	// Reordenar sliders arrastando a linha pelo fundo dela. So visual: a ordem
+	// vive na tela e no mod, e o arquivo do projeto nao e tocado.
+	bool sliderReorder = true;
+
 	// Desligada por padrao, ao contrario de todo o resto: as outras features
 	// acrescentam alguma coisa, esta TROCA a navegacao que o usuario ja tem na
 	// mao. Quem quer o esquema do Blender liga de proposito.

@@ -13,6 +13,7 @@
 #include "features/outfit_tree.h"
 #include "features/registry.h"
 #include "features/slider_menu.h"
+#include "features/slider_reorder.h"
 #include "features/stroke_stabilizer.h"
 #include "features/zero_sliders.h"
 #include "win32/winfind.h"
@@ -160,6 +161,16 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 		StrokeStabilizer::RewriteStrokeMessage(msg);
 	}
 
+	// O reorder e o unico destes que CONSOME a mensagem: enquanto uma linha
+	// esta sendo arrastada, o clique e o movimento pertencem ao arrasto e nao
+	// podem seguir para o painel.
+	if (SliderReorder::HandleMouseMessage(msg)) {
+		msg->message = WM_NULL;
+		msg->wParam = 0;
+		msg->lParam = 0;
+		return CallNextHookEx(g_hook, code, wParam, lParam);
+	}
+
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
@@ -238,7 +249,7 @@ bool HotkeysEnabled(const Config& cfg) {
 	// desligou tudo continua sem nada -- inclusive sem o item de menu.
 	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
 		   cfg.blenderCamera || cfg.zeroSlidersHotkey || cfg.stabilizerRadius > 0 ||
-		   cfg.dumpWindows || !cfg.remaps.empty();
+		   cfg.sliderReorder || cfg.dumpWindows || !cfg.remaps.empty();
 }
 
 // O BodySlide so tem uma tecla, e nao tem menubar nem view 3D. Tudo o mais que
@@ -301,6 +312,7 @@ bool Install(HWND frame) {
 	// item aparece desmarcado e nao muda nada ate ser clicado.
 	const bool camera = outfitStudio && BlenderCamera::Install(frame);
 	const bool stabilizer = outfitStudio && StrokeStabilizer::Install(frame);
+	const bool reorder = outfitStudio && cfg.sliderReorder && SliderReorder::Install(frame);
 
 	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))
 		AddBinding(cfg.zeroSliders, "zerar sliders", ActionZeroSliders);
@@ -325,7 +337,7 @@ bool Install(HWND frame) {
 	// A camera e o estabilizador nao usam binding de tecla: eles reescrevem
 	// mensagens de mouse. Sem esta parte, ligar so um dos dois nao instalaria o
 	// hook e nenhum funcionaria.
-	if (g_bindings.empty() && !camera && !stabilizer) {
+	if (g_bindings.empty() && !camera && !stabilizer && !reorder) {
 		LogF("hotkeys: nenhum atalho configurado");
 		return false;
 	}
@@ -350,6 +362,7 @@ void Uninstall() {
 	BrushResize::Uninstall();
 	BlenderCamera::Uninstall();
 	StrokeStabilizer::Uninstall();
+	SliderReorder::Uninstall();
 	ZeroSliders::Uninstall();
 	g_bindings.clear();
 	g_frame = nullptr;
