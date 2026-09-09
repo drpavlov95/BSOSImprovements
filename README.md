@@ -146,7 +146,7 @@ message changes nothing — it was measured. While a drag is running the mod rel
 Shift you are holding, or presses one you are not, and always undoes what it pressed.
 
 This is the only feature that ships off, because it does not add anything — it swaps
-navigation you already have in your hands. A **Blender camera** entry sits at the end of
+navigation you already have in your hands. A **Blender camera keymap** entry sits at the end of
 the **View** menu whether it is on or off, so you can flip it without restarting.
 
 ## Installation

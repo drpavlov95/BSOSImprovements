@@ -94,7 +94,7 @@ Outfit Studio
   nothing. During a drag the mod releases the Shift you hold, or presses one
   you do not, and always undoes what it pressed.
 
-  A "Blender camera" entry sits at the end of the View menu whether it is on
+  A "Blender camera keymap" entry sits at the end of the View menu whether it is on
   or off, so you can flip it without restarting.
 
 

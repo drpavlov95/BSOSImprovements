@@ -259,7 +259,7 @@ bool Install(HWND frame) {
 
 	if (g_viewMenu && g_commandId) {
 		AppendMenuW(g_viewMenu, MF_SEPARATOR, 0, nullptr);
-		AppendMenuW(g_viewMenu, MF_STRING, g_commandId, L"Blender camera");
+		AppendMenuW(g_viewMenu, MF_STRING, g_commandId, L"Blender camera keymap");
 		UpdateCheckMark();
 		DrawMenuBar(frame);
 		RunOnUiThread(frame, SubclassHere, nullptr);

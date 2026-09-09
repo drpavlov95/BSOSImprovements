@@ -210,6 +210,10 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	if (!wrapper || GetParent(wrapper) != g_scroll)
 		return; // o painel nao pendura na area que rola: nao mexe
 
+	// Grupo recolhido pelo usuario: quem manda no tamanho e o wx.
+	if (!IsWindowVisible(host))
+		return;
+
 	// Onde termina a ultima linha que sobrou.
 	int lastBottom = 0;
 	bool any = false;
@@ -232,19 +236,31 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	GetWindowRect(wrapper, &wrapperRect);
 	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&wrapperRect), 2);
 
-	// A altura do painel das linhas dentro do envelope, mais a folga que o
-	// envelope ja tinha em volta dela.
 	RECT hostRect = {};
 	GetWindowRect(host, &hostRect);
-	const int margin = (wrapperRect.bottom - wrapperRect.top) -
-					   static_cast<int>(hostRect.bottom - hostRect.top);
+	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&hostRect), 2);
 
-	const int wanted = lastBottom + (margin > 0 ? margin : 0);
+	// Onde o painel das linhas comeca DENTRO do envelope.
+	//
+	// O envelope carrega tambem o cabecalho do grupo -- o "Sliders" clicavel --
+	// acima do painel. Ignorar essa faixa foi o defeito: eu media a ultima
+	// linha em coordenadas do painel e aplicava o numero como altura do
+	// envelope, entao com poucos resultados o envelope ficava menor que o
+	// conteudo e cortava tudo. Era por isso que a lista sumia.
+	const int paneTop = static_cast<int>(hostRect.top - wrapperRect.top);
+	const int padding = 4;
+
+	const int paneHeight = lastBottom + padding;
+	const int wanted = paneTop + paneHeight;
 	const int current = wrapperRect.bottom - wrapperRect.top;
 	const int delta = wanted - current;
 	if (delta == 0)
 		return;
 
+	// O painel e o envelope, nessa ordem: o de dentro primeiro, para o de fora
+	// nunca ficar menor que o que carrega.
+	SetWindowPos(host, nullptr, 0, 0, static_cast<int>(hostRect.right - hostRect.left),
+				 paneHeight, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	SetWindowPos(wrapper, nullptr, 0, 0, wrapperRect.right - wrapperRect.left, wanted,
 				 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 
