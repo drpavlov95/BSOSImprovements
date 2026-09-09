@@ -39,6 +39,14 @@ struct AsymRow {
 	// O estado que o filtro deixou. Guardado para so mexer no que mudou entre
 	// uma tecla e a seguinte.
 	bool visible = true;
+
+	// Linha de cabecalho do dialogo -- "Position", "0 sliders", "26 bones" --
+	// em vez de uma linha de slider ou de osso.
+	//
+	// Elas NUNCA sao escondidas. Escondendo-as, digitar qualquer coisa que nao
+	// casasse com elas esvaziava o dialogo inteiro e ele parecia quebrado, que
+	// foi exatamente o que aconteceu.
+	bool fixed = false;
 };
 
 // Agrupa os filhos de um painel em linhas pela altura.

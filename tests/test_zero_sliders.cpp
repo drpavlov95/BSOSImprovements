@@ -151,6 +151,35 @@ TEST(IgnoresLooseAndHiddenSliders) {
 	return true;
 }
 
+TEST(FindsSlidersThatReportThemselvesInvisible) {
+	HWND frame = MakeFrame();
+	TEST_ASSERT(frame != nullptr);
+
+	// O caso real, e o que derrubou a primeira versao: no Outfit Studio as
+	// barras do painel de sliders respondem IsWindowVisible = falso mesmo
+	// desenhadas na tela. O dump mostrou UMA visivel entre quarenta e quatro,
+	// e era a de Field of View, que nem e do painel.
+	//
+	// Por isso a pergunta e feita ao PAINEL, nao a barra.
+	HWND panel = MakePanel(frame, true, 0, 0);
+	TEST_ASSERT(panel != nullptr);
+	for (int i = 0; i < 5; ++i) {
+		CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD, // sem WS_VISIBLE
+						0, i * 25, 150, 20, panel, nullptr,
+						GetModuleHandleW(nullptr), nullptr);
+	}
+
+	TEST_ASSERT(PickSliderHost(frame, nullptr) == panel);
+
+	// E a regra antiga continua valendo pelo que ela queria resolver: painel
+	// escondido -- que e o painel recolhido do programa -- sai da conta.
+	ShowWindow(panel, SW_HIDE);
+	TEST_ASSERT(PickSliderHost(frame, nullptr) == nullptr);
+
+	DestroyWindow(frame);
+	return true;
+}
+
 TEST(SurvivesAFrameWithoutSliders) {
 	TEST_ASSERT(PickSliderHost(nullptr, nullptr) == nullptr);
 

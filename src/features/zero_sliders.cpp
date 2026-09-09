@@ -19,13 +19,39 @@ struct HostCount {
 	bool scrolls = false;
 };
 
-std::vector<HWND> VisibleTrackbarChildren(HWND host) {
+std::vector<HWND> TrackbarChildren(HWND host) {
 	std::vector<HWND> out;
 	for (HWND child : ChildrenOf(host)) {
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0 && IsWindowVisible(child))
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0)
 			out.push_back(child);
 	}
 	return out;
+}
+
+// Por que nao houve painel, em detalhe.
+//
+// Um "nao achei" sozinho nao distingue as tres causas possiveis -- nenhuma
+// barra na arvore, todas em painel escondido, ou nenhum painel com duas -- e
+// foi exatamente essa ambiguidade que fez a primeira versao parecer que a
+// tecla nao chegava.
+void LogWhyNothingWasFound(HWND frame, HWND exclude) {
+	const std::vector<HWND> all = FindDescendantsByClass(frame, TRACKBAR_CLASSW);
+
+	int visibleSelf = 0;
+	int visibleHost = 0;
+	int excluded = 0;
+	for (HWND slider : all) {
+		if (IsWindowVisible(slider))
+			++visibleSelf;
+		HWND host = GetParent(slider);
+		if (host == exclude)
+			++excluded;
+		else if (host && IsWindowVisible(host))
+			++visibleHost;
+	}
+
+	LogF("zerar sliders: %d barras na arvore -- %d visiveis por si, %d com painel visivel, %d no painel de pose",
+		 static_cast<int>(all.size()), visibleSelf, visibleHost, excluded);
 }
 
 // Escreve na barra pelo mesmo caminho de um arrasto de verdade: a posicao entra
@@ -57,11 +83,22 @@ HWND PickSliderHost(HWND frame, HWND exclude) {
 	std::vector<HostCount> hosts;
 
 	for (HWND slider : FindDescendantsByClass(frame, TRACKBAR_CLASSW)) {
-		if (!IsWindowVisible(slider))
-			continue; // painel recolhido: as barras existem mas ninguem as ve
-
 		HWND host = GetParent(slider);
 		if (!host || host == exclude)
+			continue;
+
+		// A visibilidade e perguntada ao PAINEL, nao a barra.
+		//
+		// A primeira versao perguntava a barra e nao achava nada: das
+		// quarenta e quatro barras do Outfit Studio, o dump mostrou UMA
+		// respondendo visivel -- a de Field of View, que mora na barra de
+		// ferramentas. As do painel de sliders respondem que nao, mesmo
+		// desenhadas na tela.
+		//
+		// Perguntar ao painel serve igual para o que aquela regra queria
+		// resolver: painel recolhido esta escondido, e as barras dentro dele
+		// saem da conta junto.
+		if (!IsWindowVisible(host))
 			continue;
 
 		bool known = false;
@@ -128,10 +165,11 @@ bool Run() {
 	HWND host = PickSliderHost(g_frame, g_posePanel);
 	if (!host) {
 		LogF("zerar sliders: nenhum painel de sliders na tela, tecla ignorada");
+		LogWhyNothingWasFound(g_frame, g_posePanel);
 		return false;
 	}
 
-	const std::vector<HWND> sliders = VisibleTrackbarChildren(host);
+	const std::vector<HWND> sliders = TrackbarChildren(host);
 	int changed = 0;
 
 	// Um painel cheio sao dezenas de barras, e cada uma redesenha ao mudar.

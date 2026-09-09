@@ -21,6 +21,7 @@ const UINT_PTR kFrameSubclassId = 0xB50F;
 const UINT_PTR kPendingSubclassId = 0xB510;
 const UINT_PTR kDialogSubclassId = 0xB511;
 const UINT_PTR kEditSubclassId = 0xB512;
+const UINT_PTR kScrollSubclassId = 0xB513;
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
@@ -77,7 +78,17 @@ int CountCheckBoxesUnder(HWND root, int depth) {
 	return total;
 }
 
-void CollectRowHosts(HWND root, std::vector<HWND>& hosts, int depth) {
+// Um painel que contem linhas, e a que profundidade ele esta.
+//
+// A profundidade e o que separa cabecalho de conteudo: as linhas fixas moram
+// direto na area que rola, e as de slider e de osso um nivel abaixo, cada
+// grupo dentro do seu painel recolhivel.
+struct RowHost {
+	HWND window = nullptr;
+	int depth = 0;
+};
+
+void CollectRowHosts(HWND root, std::vector<RowHost>& hosts, int depth) {
 	if (depth > 8)
 		return;
 	bool hasCheck = false;
@@ -87,7 +98,7 @@ void CollectRowHosts(HWND root, std::vector<HWND>& hosts, int depth) {
 		CollectRowHosts(child, hosts, depth + 1);
 	}
 	if (hasCheck)
-		hosts.push_back(root);
+		hosts.push_back({root, depth});
 }
 
 std::wstring SearchText() {
@@ -128,7 +139,9 @@ void ApplyFilter() {
 	SendMessageW(g_scroll, WM_SETREDRAW, FALSE, 0);
 
 	for (AsymRow& row : g_rows) {
-		const bool visible = MatchesFilter(row.name, query);
+		// Cabecalho fica, sempre. Sem isto, uma consulta que nao casasse com
+		// "Position" esvaziava o dialogo e ele parecia quebrado.
+		const bool visible = row.fixed || MatchesFilter(row.name, query);
 		if (visible)
 			++shown;
 
@@ -175,9 +188,18 @@ int BandHeight(HWND dlg) {
 	return height < 22 ? 22 : height;
 }
 
+bool g_layouting = false;
+
 void ApplyLayout() {
 	if (!g_dialog || !g_edit || !g_scroll || !IsWindow(g_scroll))
 		return;
+
+	// Reposicionar a area que rola gera um WM_SIZE nela, que volta para ca. A
+	// checagem de idempotencia abaixo ja cortaria a segunda volta, mas uma
+	// trava explicita torna isso obvio para quem le.
+	if (g_layouting)
+		return;
+	g_layouting = true;
 
 	RECT sr = {};
 	GetWindowRect(g_scroll, &sr);
@@ -185,21 +207,51 @@ void ApplyLayout() {
 
 	// Idempotencia: sem ela, cada WM_SIZE encolheria a lista mais uma faixa, e
 	// WM_SHOWWINDOW, WM_SIZE e a mensagem adiada chegam em sequencia.
-	if (EqualRect(&sr, &g_appliedScrollRect))
+	if (EqualRect(&sr, &g_appliedScrollRect)) {
+		g_layouting = false;
 		return;
+	}
 
 	const int band = BandHeight(g_dialog);
 	const int width = sr.right - sr.left;
 	const int height = sr.bottom - sr.top;
-	if (width <= 20 || height <= band * 2)
+	if (width <= 20 || height <= band * 2) {
+		g_layouting = false;
 		return;
+	}
 
 	SetWindowPos(g_scroll, nullptr, sr.left, sr.top + band, width, height - band,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(g_edit, nullptr, sr.left, sr.top + 1, width, band - 5,
-				 SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// A caixa vai para o TOPO da z-order, e nao fica onde nasceu.
+	//
+	// Expandir um dos paineis recolhiveis faz o wx refazer o layout e
+	// repintar a moldura do grupo por cima dela -- foi assim que a busca
+	// simplesmente sumiu da tela depois de expandir "Bones".
+	//
+	// A largura tambem nao e a da lista inteira: ocupar tudo cobria o titulo
+	// "Vertex Data Asymmetries".
+	const int searchWidth = (width > 420) ? 360 : (width - 40);
+	SetWindowPos(g_edit, HWND_TOP, sr.right - searchWidth, sr.top + 1, searchWidth, band - 5,
+				 SWP_NOACTIVATE);
 
 	SetRect(&g_appliedScrollRect, sr.left, sr.top + band, sr.right, sr.bottom);
+	g_layouting = false;
+}
+
+// A area que rola tambem e observada, e nao so o dialogo.
+//
+// Expandir "Sliders" ou "Bones" refaz o layout DELA sem tocar no tamanho do
+// dialogo, entao o WM_SIZE do dialogo nunca chega e a faixa da busca nao era
+// reaplicada -- a lista voltava ao tamanho cheio e engolia a caixa.
+LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_NCDESTROY)
+		RemoveWindowSubclass(hwnd, ScrollSubclassProc, id);
+
+	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
+	if (msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED)
+		ApplyLayout();
+	return result;
 }
 
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
@@ -302,11 +354,25 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	// As linhas moram em mais de um painel: as fixas ficam direto na area que
 	// rola, e as de slider e de osso, cada uma dentro do seu painel recolhivel.
-	std::vector<HWND> hosts;
+	std::vector<RowHost> hosts;
 	CollectRowHosts(scroll, hosts, 0);
-	for (HWND host : hosts) {
-		for (const AsymRow& row : GroupRowsByTop(host))
-			g_rows.push_back(row);
+
+	// O painel mais raso e o do cabecalho. Tudo mais fundo e conteudo, e e so
+	// isso que o filtro esconde.
+	int shallowest = 99;
+	for (const RowHost& host : hosts)
+		shallowest = (host.depth < shallowest) ? host.depth : shallowest;
+
+	int fixedRows = 0;
+	for (const RowHost& host : hosts) {
+		const bool isHeader = (host.depth == shallowest);
+		for (const AsymRow& row : GroupRowsByTop(host.window)) {
+			AsymRow copy = row;
+			copy.fixed = isHeader;
+			if (isHeader)
+				++fixedRows;
+			g_rows.push_back(copy);
+		}
 	}
 
 	if (g_rows.empty()) {
@@ -318,6 +384,7 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	AddSearchBox(dlg);
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
+	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
 
 	// O layout so vale depois que o dialogo estiver montado: aqui ainda
 	// estamos dentro do WM_WINDOWPOSCHANGING que o exibe, e o retangulo da
@@ -327,8 +394,8 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	if (g_deferredLayout)
 		PostMessageW(dlg, g_deferredLayout, 0, 0);
 
-	LogF("symmetrize: busca instalada, %d linhas em %d paineis",
-		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()));
+	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nunca somem)",
+		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()), fixedRows);
 }
 
 LRESULT CALLBACK PendingDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
