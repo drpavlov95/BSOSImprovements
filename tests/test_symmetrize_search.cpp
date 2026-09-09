@@ -105,6 +105,54 @@ TEST(IgnoresPanelsWithoutChecks) {
 	return true;
 }
 
+TEST(ClosesTheGapsTheFilterOpens) {
+	// Esta e a feature: sem fechar buraco, procurar "nip" deixava os
+	// resultados la embaixo, com um vazio enorme em cima -- que foi
+	// exatamente o que apareceu na tela.
+	const std::vector<int> tops = {0, 25, 50, 75, 100};
+
+	// So a terceira e a quinta casam: elas sobem para os dois primeiros
+	// lugares, que sao os lugares que a lista ja tinha.
+	const std::vector<bool> some = {false, false, true, false, true};
+	const std::vector<int> placed = CompactRowTops(tops, some);
+	TEST_ASSERT(placed.size() == 5);
+	TEST_ASSERT(placed[2] == 0);
+	TEST_ASSERT(placed[4] == 25);
+
+	// As escondidas ficam onde estavam. Move-las seria trabalho invisivel, e o
+	// topo delas e o que permite reconstruir a regua na proxima tecla.
+	TEST_ASSERT(placed[0] == 0);
+	TEST_ASSERT(placed[1] == 25);
+	TEST_ASSERT(placed[3] == 75);
+
+	// Sem filtro, cada linha fica no proprio lugar -- limpar a busca tem que
+	// devolver a lista exatamente como estava.
+	const std::vector<bool> all(5, true);
+	const std::vector<int> untouched = CompactRowTops(tops, all);
+	for (size_t i = 0; i < tops.size(); ++i)
+		TEST_ASSERT(untouched[i] == tops[i]);
+
+	// Nada casando nao move nada.
+	const std::vector<bool> none(5, false);
+	const std::vector<int> nothing = CompactRowTops(tops, none);
+	for (size_t i = 0; i < tops.size(); ++i)
+		TEST_ASSERT(nothing[i] == tops[i]);
+
+	// Espacamento irregular e respeitado: os lugares sao os da lista, nao uma
+	// altura fixa inventada aqui.
+	const std::vector<int> uneven = {0, 10, 40, 100};
+	const std::vector<bool> lastTwo = {false, false, true, true};
+	const std::vector<int> onUneven = CompactRowTops(uneven, lastTwo);
+	TEST_ASSERT(onUneven[2] == 0);
+	TEST_ASSERT(onUneven[3] == 10);
+
+	// Tamanhos incompativeis nao produzem posicao nenhuma: melhor nao mexer
+	// que empilhar linha em cima de linha.
+	TEST_ASSERT(CompactRowTops(tops, {true, false}).empty());
+	TEST_ASSERT(CompactRowTops({}, {}).empty());
+	return true;
+}
+
 TEST(FindsTheListAreaAmongTheDialogChildren) {
 	HWND dlg = MakeHost(nullptr, 0);
 	TEST_ASSERT(dlg != nullptr);

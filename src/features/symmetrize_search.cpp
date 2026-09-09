@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "core/diag.h"
 #include "core/host.h"
 #include "core/log.h"
 #include "core/theme.h"
@@ -109,20 +110,76 @@ std::wstring SearchText() {
 	return raw;
 }
 
-// Provoca um novo layout do wx.
-//
-// E o passo que fecha os buracos: um sizer nao reserva espaco para janela
-// escondida, entao ao refazer o layout ele reposiciona o que sobrou e recalcula
-// a faixa de rolagem. Reposicionar na mao daria errado assim que a lista
-// rolasse, porque as coordenadas guardadas deixariam de valer.
-void PokeLayout(HWND window) {
-	if (!window || !IsWindow(window))
+void CollectAllDescendants(HWND root, std::vector<HWND>& out, int depth) {
+	if (depth > 8)
 		return;
-	RECT rc = {};
-	GetClientRect(window, &rc);
-	SendMessageW(window, WM_SIZE, SIZE_RESTORED,
-				 MAKELPARAM(static_cast<WORD>(rc.right - rc.left),
-							static_cast<WORD>(rc.bottom - rc.top)));
+	for (HWND child : ChildrenOf(root)) {
+		out.push_back(child);
+		CollectAllDescendants(child, out, depth + 1);
+	}
+}
+
+std::vector<HWND> AllDescendants(HWND root) {
+	std::vector<HWND> out;
+	CollectAllDescendants(root, out, 0);
+	return out;
+}
+
+// Reposiciona as linhas de UM painel, fechando os buracos que o filtro abriu.
+//
+// A base -- o topo do primeiro lugar da lista -- e lida das posicoes ATUAIS, e
+// nao guardada da instalacao. Guardar daria errado no primeiro rolar: a lista
+// rola movendo os filhos, e as coordenadas de ontem apontariam para o lugar
+// errado. Como linha escondida nunca e movida, o menor topo do painel continua
+// sendo o do primeiro lugar, e da para reconstruir a regua a partir dele.
+void CompactHost(HWND host) {
+	std::vector<AsymRow*> rows;
+	for (AsymRow& row : g_rows) {
+		if (row.host == host)
+			rows.push_back(&row);
+	}
+	if (rows.empty())
+		return;
+
+	std::sort(rows.begin(), rows.end(),
+			  [](const AsymRow* a, const AsymRow* b) { return a->top < b->top; });
+
+	int base = 0;
+	bool haveBase = false;
+	for (const AsymRow* row : rows) {
+		const RECT rc = RectInParent(row->check);
+		if (!haveBase || rc.top < base) {
+			base = static_cast<int>(rc.top);
+			haveBase = true;
+		}
+	}
+	if (!haveBase)
+		return;
+
+	std::vector<int> tops;
+	std::vector<bool> visible;
+	tops.reserve(rows.size());
+	visible.reserve(rows.size());
+	const int firstTop = rows.front()->top;
+	for (const AsymRow* row : rows) {
+		tops.push_back(base + (row->top - firstTop));
+		visible.push_back(row->visible);
+	}
+
+	const std::vector<int> placed = CompactRowTops(tops, visible);
+	if (placed.size() != rows.size())
+		return;
+
+	for (size_t i = 0; i < rows.size(); ++i) {
+		if (!rows[i]->visible)
+			continue;
+		for (const AsymCell& cell : rows[i]->cells) {
+			const RECT rc = RectInParent(cell.window);
+			SetWindowPos(cell.window, nullptr, static_cast<int>(rc.left),
+						 placed[i] + cell.offsetY, 0, 0,
+						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+	}
 }
 
 void ApplyFilter() {
@@ -153,20 +210,31 @@ void ApplyFilter() {
 		row.visible = visible;
 		++touched;
 
-		for (HWND cell : row.cells)
-			ShowWindow(cell, visible ? SW_SHOW : SW_HIDE);
+		for (const AsymCell& cell : row.cells)
+			ShowWindow(cell.window, visible ? SW_SHOW : SW_HIDE);
 	}
 
 	if (touched > 0) {
-		PokeLayout(g_scroll);
-		PokeLayout(g_dialog);
+		// Um painel por vez: cada grupo recolhivel tem a propria regua de
+		// lugares, e misturar as duas empilharia osso em cima de slider.
+		std::vector<HWND> hosts;
+		for (const AsymRow& row : g_rows) {
+			bool known = false;
+			for (HWND seen : hosts)
+				known = known || (seen == row.host);
+			if (!known)
+				hosts.push_back(row.host);
+		}
+		for (HWND host : hosts)
+			CompactHost(host);
 	}
 
 	SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
 	if (touched > 0)
 		RedrawWindow(g_scroll, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
 
-	(void)shown;
+	LogF("symmetrize: filtro '%ls' -- %d de %d linhas visiveis, %d mudaram",
+		 query.c_str(), shown, static_cast<int>(g_rows.size()), touched);
 }
 
 // Reserva a faixa da busca acima da lista, do mesmo jeito que a busca do Batch
@@ -396,6 +464,12 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nunca somem)",
 		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()), fixedRows);
+
+	// A estrutura deste dialogo so existe enquanto ele esta aberto, e ele e
+	// modal. Despejar aqui e o unico jeito de olhar para ela sem depender de o
+	// usuario lembrar de apertar uma tecla no momento certo.
+	if (Cfg().dumpWindows)
+		Diag::DumpWindowTree(dlg, "dialogo de simetria");
 }
 
 LRESULT CALLBACK PendingDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
@@ -510,8 +584,9 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 
 		AsymRow row;
 		row.check = anchor.window;
+		row.host = parent;
 		row.top = static_cast<int>(anchor.rect.top);
-		row.cells.push_back(anchor.window);
+		row.cells.push_back({anchor.window, 0});
 		row.name = anchor.text;
 
 		for (const Child& sibling : children) {
@@ -530,7 +605,8 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 			if (center < anchor.rect.top || center > anchor.rect.bottom)
 				continue;
 
-			row.cells.push_back(sibling.window);
+			row.cells.push_back(
+				{sibling.window, static_cast<int>(sibling.rect.top - anchor.rect.top)});
 
 			if (!sibling.text.empty()) {
 				if (!row.name.empty())
@@ -547,20 +623,57 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 	return rows;
 }
 
+std::vector<int> CompactRowTops(const std::vector<int>& tops, const std::vector<bool>& visible) {
+	std::vector<int> out;
+	if (tops.size() != visible.size())
+		return out;
+
+	out.reserve(tops.size());
+	size_t slot = 0;
+	for (size_t i = 0; i < tops.size(); ++i) {
+		if (!visible[i]) {
+			// Escondida fica onde estava. Move-la seria trabalho invisivel, e
+			// o topo dela e o que permite reconstruir a regua depois.
+			out.push_back(tops[i]);
+			continue;
+		}
+		out.push_back(tops[slot]);
+		++slot;
+	}
+	return out;
+}
+
 HWND FindAsymScroll(HWND dlg) {
 	if (!dlg)
 		return nullptr;
 
+	// A janela que ROLA, e nao simplesmente um filho do dialogo.
+	//
+	// A versao anterior pegava o filho direto com mais caixas de marcacao, e
+	// isso podia cair na moldura do grupo em vez da area que rola de verdade
+	// -- e ai a faixa da busca era reservada na janela errada, cortando o
+	// topo da lista.
 	HWND best = nullptr;
 	int bestCount = 0;
 
-	// Filhos diretos do dialogo: a area que rola e um deles, e a caixa de
-	// grupo desenhada em volta dela e irma, nao mae.
-	for (HWND child : ChildrenOf(dlg)) {
-		const int count = CountCheckBoxesUnder(child, 0);
+	for (HWND candidate : AllDescendants(dlg)) {
+		if ((GetWindowLongW(candidate, GWL_STYLE) & WS_VSCROLL) == 0)
+			continue;
+		const int count = CountCheckBoxesUnder(candidate, 0);
 		if (count > bestCount) {
 			bestCount = count;
-			best = child;
+			best = candidate;
+		}
+	}
+
+	// Sem nenhuma que role, vale o antigo: melhor a moldura do que nada.
+	if (bestCount < 2) {
+		for (HWND child : ChildrenOf(dlg)) {
+			const int count = CountCheckBoxesUnder(child, 0);
+			if (count > bestCount) {
+				bestCount = count;
+				best = child;
+			}
 		}
 	}
 
