@@ -8,16 +8,15 @@
 #include "core/log.h"
 #include "core/ui_thread.h"
 #include "win32/menu.h"
+#include "win32/menu_toggle.h"
 #include "win32/winfind.h"
 #include "xrcmap.h"
 
 namespace {
 
-const UINT_PTR kFrameSubclassId = 0xB50E;
 
 HWND g_frame = nullptr;
 HWND g_canvas = nullptr;
-HMENU g_viewMenu = nullptr;
 UINT g_commandId = 0;
 bool g_enabled = false;
 bool g_installed = false;
@@ -77,80 +76,10 @@ void HoldShiftOverride() {
 		SendShift(true);
 }
 
-bool MenuUsesId(HMENU menu, UINT id, int depth) {
-	if (!menu || depth > 8)
-		return false;
-
-	const int count = GetMenuItemCount(menu);
-	for (int i = 0; i < count; ++i) {
-		if (HMENU sub = GetSubMenu(menu, i)) {
-			if (MenuUsesId(sub, id, depth + 1))
-				return true;
-			continue;
-		}
-		if (CommandIdAt(menu, i) == id)
-			return true;
-	}
-	return false;
-}
-
-// Um id que nao colida com nada que ja esteja na menubar.
-//
-// Nao da para escolher um numero fixo e torcer: os ids do wx sao atribuidos em
-// runtime pela ordem de registro do XRC, entao nao ha faixa reservada que se
-// possa assumir livre. Verificar contra o menu vivo custa uma varredura, uma
-// vez, e elimina a duvida.
-UINT FindFreeCommandId(HMENU bar) {
-	for (UINT candidate = 0xBF20; candidate < 0xBF60; ++candidate) {
-		if (!MenuUsesId(bar, candidate, 0))
-			return candidate;
-	}
-	return 0;
-}
-
-HMENU FindViewMenu(HWND frame) {
-	HMENU bar = GetMenu(frame);
-	if (!bar)
-		return nullptr;
-
-	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	const MenuTrail trail = ResolveMenuTrail(xrc.c_str(), "menuView");
-	if (trail.empty())
-		return nullptr;
-
-	int index = -1;
-	HMENU container = ContainerAtLabeledPath(bar, trail.path, trail.labels, index);
-	return container ? SubMenuAt(container, index) : nullptr;
-}
-
-void UpdateCheckMark() {
-	if (g_viewMenu && g_commandId)
-		CheckMenuItem(g_viewMenu, g_commandId,
-					  MF_BYCOMMAND | (g_enabled ? MF_CHECKED : MF_UNCHECKED));
-}
-
-LRESULT CALLBACK FrameSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
-	if (msg == WM_NCDESTROY)
-		RemoveWindowSubclass(hwnd, FrameSubclassProc, id);
-
-	if (msg == WM_COMMAND && g_commandId != 0 && LOWORD(wParam) == g_commandId &&
-		HIWORD(wParam) == 0 && lParam == 0) {
-		BlenderCamera::SetEnabled(!g_enabled);
-		LogF("camera blender: %s pelo menu", g_enabled ? "ligada" : "desligada");
-		return 0; // nosso comando: o wx nao tem o que fazer com ele
-	}
-
-	return DefSubclassProc(hwnd, msg, wParam, lParam);
-}
-
-void SubclassHere(void*) {
-	if (!SetWindowSubclass(g_frame, FrameSubclassProc, kFrameSubclassId, 0))
-		LogF("camera blender: nao consegui subclassar o frame -- fica so o INI");
-}
-
-void UnsubclassHere(void*) {
-	if (g_frame && IsWindow(g_frame))
-		RemoveWindowSubclass(g_frame, FrameSubclassProc, kFrameSubclassId);
+// O interruptor do menu chama isto.
+void OnMenuToggle(bool checked) {
+	BlenderCamera::SetEnabled(checked);
+	LogF("camera blender: %s pelo menu", checked ? "ligada" : "desligada");
 }
 
 } // namespace
@@ -253,22 +182,12 @@ bool Install(HWND frame) {
 
 	// O item de menu e um extra: se nao der para criar, a feature continua
 	// funcionando pelo INI.
-	HMENU bar = GetMenu(frame);
-	g_viewMenu = FindViewMenu(frame);
-	g_commandId = bar ? FindFreeCommandId(bar) : 0;
-
-	if (g_viewMenu && g_commandId) {
-		AppendMenuW(g_viewMenu, MF_SEPARATOR, 0, nullptr);
-		AppendMenuW(g_viewMenu, MF_STRING, g_commandId, L"Blender camera keymap");
-		UpdateCheckMark();
-		DrawMenuBar(frame);
-		RunOnUiThread(frame, SubclassHere, nullptr);
-		LogF("camera blender: item de menu criado com id %u", g_commandId);
-	} else {
-		g_viewMenu = nullptr;
-		g_commandId = 0;
-		LogF("camera blender: sem item de menu (menu View nao resolvido) -- so o INI");
-	}
+	HMENU view = MenuToggle::FindMenu(frame, "menuView");
+	g_commandId = view ? MenuToggle::Add(frame, view, L"Blender camera keymap",
+										 g_enabled, OnMenuToggle)
+					   : 0;
+	if (g_commandId == 0)
+		LogF("camera blender: sem item de menu -- fica so o INI");
 
 	g_installed = true;
 	LogF("camera blender: instalada no canvas %p, comeca %s",
@@ -277,27 +196,10 @@ bool Install(HWND frame) {
 }
 
 void Uninstall() {
-	if (g_installed && g_frame) {
-		if (g_viewMenu && g_commandId) {
-			DeleteMenu(g_viewMenu, g_commandId, MF_BYCOMMAND);
-
-			// E o separador que veio junto. Deixa-lo para tras faria o menu do
-			// usuario ganhar um risco solto no fim a cada ciclo de instalar e
-			// desinstalar.
-			const int last = GetMenuItemCount(g_viewMenu) - 1;
-			if (last >= 0 && MenuTextAt(g_viewMenu, last).empty() &&
-				!GetSubMenu(g_viewMenu, last))
-				DeleteMenu(g_viewMenu, static_cast<UINT>(last), MF_BYPOSITION);
-
-			if (IsWindow(g_frame))
-				DrawMenuBar(g_frame);
-		}
-		RunOnUiThread(g_frame, UnsubclassHere, nullptr);
-	}
-
+	// Quem tira os itens do menu e o proprio modulo de toggle: ele conhece
+	// todos, inclusive os das outras features, e tira o separador junto.
 	g_frame = nullptr;
 	g_canvas = nullptr;
-	g_viewMenu = nullptr;
 	g_commandId = 0;
 	g_installed = false;
 	ClearShiftOverride();
@@ -314,7 +216,7 @@ void SetEnabled(bool enabled) {
 	// partir dai todo movimento do mouse viria com o botao trocado.
 	ClearShiftOverride();
 	g_state = CameraState();
-	UpdateCheckMark();
+	MenuToggle::SetChecked(g_commandId, enabled);
 }
 
 // Fecha um arrasto que ficou preso, mandando ao programa o "soltar" que ele

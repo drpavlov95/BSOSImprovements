@@ -175,6 +175,7 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.mirrorBonePose = ReadBool(iniPath, L"Features", L"MirrorBonePose", c.mirrorBonePose);
 	c.zeroSlidersHotkey = ReadBool(iniPath, L"Features", L"ZeroSlidersHotkey", c.zeroSlidersHotkey);
 	c.sliderReorder = ReadBool(iniPath, L"Features", L"SliderReorder", c.sliderReorder);
+	c.sliderDragHandles = ReadBool(iniPath, L"Features", L"SliderDragHandles", c.sliderDragHandles);
 	c.blenderCamera = ReadBool(iniPath, L"Features", L"BlenderCamera", c.blenderCamera);
 
 	c.selectReference = ReadHotkey(iniPath, L"SelectReference", c.selectReference);

@@ -8,6 +8,7 @@
 #include "core/log.h"
 #include "features/pose_panel.h"
 #include "features/zero_sliders.h" // PickSliderHost
+#include "win32/menu_toggle.h"
 #include "win32/winfind.h"
 
 namespace {
@@ -54,6 +55,133 @@ std::vector<HWND> FindRows(HWND host) {
 	return rows;
 }
 
+// Quanto os controles do programa andam para a direita para abrir espaco.
+//
+// A medida veio da propria linha, registrada no log: 766x25, com o lapis em
+// 0..22, a caixa em 27..42, o nome em 47..149, a barra em 154..715 e o valor em
+// 722..762. Nao havia UM pixel livre -- o maior vao eram cinco pixels entre o
+// lapis e a caixa -- entao a alca so cabe empurrando.
+const int kHandleShift = 20;
+const int kHandleId = 0xBF03;
+
+bool g_handlesOn = true;
+UINT g_handleMenuId = 0;
+HWND g_handleAnchor = nullptr; // uma linha ja tratada, para notar a lista refeita
+
+HWND HandleOf(HWND row) {
+	return GetDlgItem(row, kHandleId);
+}
+
+// Poe a alca numa linha e empurra o resto para a direita.
+//
+// Quem tem a barra encolhe em vez de andar: se ela tambem andasse, o campo de
+// valor sairia pela borda da linha.
+void AddHandle(HWND row) {
+	if (HandleOf(row))
+		return; // ja tem
+
+	const std::vector<HWND> children = ChildrenOf(row);
+	if (children.empty())
+		return;
+
+	int trackbarLeft = 0;
+	bool haveTrackbar = false;
+	for (HWND child : children) {
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) != 0)
+			continue;
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+		trackbarLeft = static_cast<int>(rc.left);
+		haveTrackbar = true;
+	}
+	if (!haveTrackbar)
+		return; // sem barra nao e linha de slider
+
+	for (HWND child : children) {
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+
+		const int width = static_cast<int>(rc.right - rc.left);
+		const int height = static_cast<int>(rc.bottom - rc.top);
+
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0) {
+			SetWindowPos(child, nullptr, static_cast<int>(rc.left) + kHandleShift,
+						 static_cast<int>(rc.top), width - kHandleShift, height,
+						 SWP_NOZORDER | SWP_NOACTIVATE);
+		} else if (static_cast<int>(rc.left) < trackbarLeft) {
+			SetWindowPos(child, nullptr, static_cast<int>(rc.left) + kHandleShift,
+						 static_cast<int>(rc.top), 0, 0,
+						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+		// A direita da barra fica onde esta: o valor nao pode sair da linha.
+	}
+
+	RECT rowRect = {};
+	GetClientRect(row, &rowRect);
+	const int size = 16;
+	const int top = (static_cast<int>(rowRect.bottom) - size) / 2;
+
+	// Static, e nao Button, de proposito: Static sem SS_NOTIFY devolve o clique
+	// ao pai, entao a alca pega o arrasto pelo mesmo caminho que o fundo da
+	// linha ja usa. Um botao consumiria o clique e nao arrastaria nada.
+	HWND handle = CreateWindowExW(0, L"STATIC", L"≡",
+								  WS_CHILD | WS_VISIBLE | SS_CENTER,
+								  2, top > 0 ? top : 0, size, size, row,
+								  reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kHandleId)),
+								  reinterpret_cast<HINSTANCE>(
+									  GetWindowLongPtrW(row, GWLP_HINSTANCE)),
+								  nullptr);
+	if (!handle)
+		return;
+
+	if (HFONT font = reinterpret_cast<HFONT>(SendMessageW(row, WM_GETFONT, 0, 0)))
+		SendMessageW(handle, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+// Tira a alca e devolve os controles ao lugar.
+void RemoveHandle(HWND row) {
+	HWND handle = HandleOf(row);
+	if (!handle)
+		return;
+
+	DestroyWindow(handle);
+
+	int trackbarLeft = 0;
+	bool haveTrackbar = false;
+	for (HWND child : ChildrenOf(row)) {
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) != 0)
+			continue;
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+		trackbarLeft = static_cast<int>(rc.left);
+		haveTrackbar = true;
+	}
+	if (!haveTrackbar)
+		return;
+
+	for (HWND child : ChildrenOf(row)) {
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+
+		const int width = static_cast<int>(rc.right - rc.left);
+		const int height = static_cast<int>(rc.bottom - rc.top);
+
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0) {
+			SetWindowPos(child, nullptr, static_cast<int>(rc.left) - kHandleShift,
+						 static_cast<int>(rc.top), width + kHandleShift, height,
+						 SWP_NOZORDER | SWP_NOACTIVATE);
+		} else if (static_cast<int>(rc.left) <= trackbarLeft) {
+			SetWindowPos(child, nullptr, static_cast<int>(rc.left) - kHandleShift,
+						 static_cast<int>(rc.top), 0, 0,
+						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+	}
+}
+
 void PlaceRow(HWND row, int top) {
 	RECT rc = {};
 	GetWindowRect(row, &rc);
@@ -97,6 +225,43 @@ void Finish(bool cancelled) {
 		 static_cast<int>(g_order.size()));
 
 	g_dragIndex = -1;
+}
+
+// Aplica ou tira as alcas de todas as linhas do painel de agora.
+void RefreshHandles() {
+	HWND host = PickSliderHost(g_frame, g_posePanel);
+	if (!host)
+		return;
+
+	const std::vector<HWND> rows = FindRows(host);
+	if (rows.empty())
+		return;
+
+	for (HWND row : rows) {
+		if (g_handlesOn)
+			AddHandle(row);
+		else
+			RemoveHandle(row);
+	}
+
+	g_handleAnchor = g_handlesOn ? rows.front() : nullptr;
+	LogF("reorder: alcas %s em %d linhas", g_handlesOn ? "postas" : "tiradas",
+		 static_cast<int>(rows.size()));
+}
+
+// A lista e refeita a cada troca de outfit, e as alcas morrem com as linhas
+// velhas. Uma checagem de uma chamada por movimento de mouse basta para notar.
+void RefreshHandlesIfListWasRebuilt() {
+	if (!g_handlesOn)
+		return;
+	if (g_handleAnchor && IsWindow(g_handleAnchor) && HandleOf(g_handleAnchor))
+		return;
+	RefreshHandles();
+}
+
+void OnHandlesToggled(bool checked) {
+	g_handlesOn = checked;
+	RefreshHandles();
 }
 
 bool BeginDrag(MSG* msg) {
@@ -243,9 +408,16 @@ bool Install(HWND frame) {
 
 	const PosePanel pose = FindPosePanel(frame);
 	g_posePanel = pose.ok ? pose.panel : nullptr;
+	g_handlesOn = Cfg().sliderDragHandles;
+
+	if (HMENU view = MenuToggle::FindMenu(frame, "menuView")) {
+		g_handleMenuId = MenuToggle::Add(frame, view, L"Slider drag handles",
+										 g_handlesOn, OnHandlesToggled);
+	}
 
 	g_installed = true;
-	LogF("reorder: pronto (arraste pelo fundo da linha)");
+	LogF("reorder: pronto (arraste pela alca ou pelo fundo da linha), alcas %s",
+		 g_handlesOn ? "ligadas" : "desligadas");
 	return true;
 }
 
@@ -255,6 +427,8 @@ void Uninstall() {
 	g_posePanel = nullptr;
 	g_host = nullptr;
 	g_installed = false;
+	g_handleAnchor = nullptr;
+	g_handleMenuId = 0;
 	g_order.clear();
 	g_originalOrder.clear();
 	g_slotTops.clear();
@@ -269,8 +443,10 @@ bool HandleMouseMessage(MSG* msg) {
 			return BeginDrag(msg);
 
 		case WM_MOUSEMOVE:
-			if (!g_dragging)
+			if (!g_dragging) {
+				RefreshHandlesIfListWasRebuilt();
 				return false;
+			}
 			DragTo(msg);
 			return true;
 

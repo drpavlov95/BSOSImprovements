@@ -16,6 +16,7 @@
 #include "features/slider_reorder.h"
 #include "features/stroke_stabilizer.h"
 #include "features/zero_sliders.h"
+#include "win32/menu_toggle.h"
 #include "win32/winfind.h"
 #include "xrcmap.h"
 
@@ -363,6 +364,7 @@ void Uninstall() {
 	BlenderCamera::Uninstall();
 	StrokeStabilizer::Uninstall();
 	SliderReorder::Uninstall();
+	MenuToggle::RemoveAll();
 	ZeroSliders::Uninstall();
 	g_bindings.clear();
 	g_frame = nullptr;

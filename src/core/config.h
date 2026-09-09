@@ -56,6 +56,11 @@ struct Config {
 	// vive na tela e no mod, e o arquivo do projeto nao e tocado.
 	bool sliderReorder = true;
 
+	// As alcas de arrastar ao lado do lapis. Ligar empurra os controles do
+	// programa uns pixels para a direita para abrir espaco -- nao havia nenhum
+	// livre na linha.
+	bool sliderDragHandles = true;
+
 	// Desligada por padrao, ao contrario de todo o resto: as outras features
 	// acrescentam alguma coisa, esta TROCA a navegacao que o usuario ja tem na
 	// mao. Quem quer o esquema do Blender liga de proposito.
