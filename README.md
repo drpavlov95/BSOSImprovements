@@ -115,14 +115,39 @@ hand is a brush; with the Select tool the left button moves the camera, and lagg
 would be a defect rather than a help. The mod knows which tool is active by reading the
 check mark off the **Tool ▸ Current Tool** menu, which is a radio group.
 
-**Blender-style camera** *(off by default)*. The **middle** mouse button orbits and
-**Shift+middle** pans, like Blender. The right button keeps orbiting the way it always
-did, so nothing you already know stops working.
+**Reorder sliders by dragging.** Press on the **background** of a slider row and drag it
+where you want. The pencil still enters edit mode, the checkbox still ticks, the bar still
+drags its value — only the empty part of the row picks it up, so nothing that already
+worked is taken away. `Esc` cancels and puts the order back.
+
+This was possible because of something the log turned up while chasing a different bug:
+each slider row is its own panel, so dragging one is moving a single window rather than
+rebuilding a layout.
+
+For now the new order lives on screen only; the project file is untouched. Writing it into
+the `.osp` when *you* save is the next step.
+
+**Blender-style camera** *(off by default)*. The vanilla of the two programs, side by
+side:
+
+| Outfit Studio | Blender |
+|---|---|
+| middle — pan | middle — orbit |
+| right — rotate | Shift+middle — pan |
+| Shift+middle — zoom | Ctrl+middle — zoom |
+| wheel — zoom | wheel — zoom |
+
+The wheel already agrees. The rest is a three-way permutation, and that is what this does.
+The right button keeps rotating, so nothing you already know stops working.
+
+One thing worth knowing: the modifier is swapped **on the keyboard**, not in the message.
+Outfit Studio decides pan-versus-zoom by reading the physical key, so rewriting the
+message changes nothing — it was measured. While a drag is running the mod releases the
+Shift you are holding, or presses one you are not, and always undoes what it pressed.
 
 This is the only feature that ships off, because it does not add anything — it swaps
-navigation you already have in your hands. Turn it on in the INI and a **Blender camera**
-entry appears at the end of the **View** menu, so you can flip it back and forth without
-restarting.
+navigation you already have in your hands. A **Blender camera** entry sits at the end of
+the **View** menu whether it is on or off, so you can flip it without restarting.
 
 ## Installation
 

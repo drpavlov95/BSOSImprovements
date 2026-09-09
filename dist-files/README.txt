@@ -74,11 +74,28 @@ Outfit Studio
   stroke, and only when the tool in your hand is a brush -- with the Select
   tool the left button moves the camera.
 
-  Blender-style camera, OFF by default. Middle mouse orbits, Shift+middle
-  pans. The right button keeps orbiting as before. It ships off because it
-  swaps navigation you already have in your hands rather than adding
-  anything. Set BlenderCamera=1 and a "Blender camera" entry appears at the
-  end of the View menu, so you can flip it without restarting.
+  Reorder sliders by dragging a row. Press on the BACKGROUND of the row --
+  the pencil, the checkbox and the bar keep working as they do. Esc cancels.
+  For now the order is only on screen; the project file is untouched.
+
+  Blender-style camera, OFF by default:
+
+    Outfit Studio          Blender
+    middle ....... pan     middle ....... orbit
+    right ........ rotate  Shift+middle . pan
+    Shift+middle . zoom    Ctrl+middle .. zoom
+    wheel ........ zoom    wheel ........ zoom
+
+  The wheel already matches; the rest is a three-way permutation and that is
+  what this does. The right button keeps rotating.
+
+  The modifier is swapped on the KEYBOARD, not in the message: Outfit Studio
+  reads the physical key to choose pan or zoom, so rewriting the message does
+  nothing. During a drag the mod releases the Shift you hold, or presses one
+  you do not, and always undoes what it pressed.
+
+  A "Blender camera" entry sits at the end of the View menu whether it is on
+  or off, so you can flip it without restarting.
 
 
 INSTALL
