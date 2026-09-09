@@ -180,6 +180,41 @@ TEST(FindsSlidersThatReportThemselvesInvisible) {
 	return true;
 }
 
+TEST(FindsTheHostWhenEachSliderSitsInItsOwnRowPanel) {
+	HWND frame = MakeFrame();
+	TEST_ASSERT(frame != nullptr);
+
+	// A forma real do Outfit Studio, e a que derrubou duas versoes seguidas:
+	// cada linha de slider e um painel proprio, com o lapis, a caixa, o nome, a
+	// barra e a porcentagem dentro. Agrupando por pai DIRETO davam cento e
+	// trinta e um paineis de uma barra cada, e nenhum passava na regra de ter
+	// pelo menos duas.
+	HWND scroll = MakePanel(frame, true, 0, 0);
+	TEST_ASSERT(scroll != nullptr);
+
+	for (int i = 0; i < 6; ++i) {
+		HWND rowPanel = CreateWindowExW(0, L"BSOSZeroHost", L"", WS_CHILD | WS_VISIBLE,
+										0, i * 25, 200, 20, scroll, nullptr,
+										GetModuleHandleW(nullptr), nullptr);
+		TEST_ASSERT(rowPanel != nullptr);
+		CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE,
+						40, 0, 150, 20, rowPanel, nullptr,
+						GetModuleHandleW(nullptr), nullptr);
+	}
+
+	// Sobe um nivel e acha a area que rola, que e o pai das linhas.
+	TEST_ASSERT(PickSliderHost(frame, nullptr) == scroll);
+
+	// E o nivel 1 continua valendo para o BodySlide, onde as barras sao filhas
+	// diretas da area que rola.
+	HWND flat = MakePanel(frame, true, 4, 400);
+	TEST_ASSERT(flat != nullptr);
+	TEST_ASSERT(PickSliderHost(frame, nullptr) == flat); // nivel 1 vence, e vem antes
+
+	DestroyWindow(frame);
+	return true;
+}
+
 TEST(SurvivesAFrameWithoutSliders) {
 	TEST_ASSERT(PickSliderHost(nullptr, nullptr) == nullptr);
 

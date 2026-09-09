@@ -19,11 +19,25 @@ struct HostCount {
 	bool scrolls = false;
 };
 
-std::vector<HWND> TrackbarChildren(HWND host) {
+bool IsUnder(HWND window, HWND ancestor) {
+	if (!ancestor)
+		return false;
+	for (HWND walk = window; walk; walk = GetParent(walk)) {
+		if (walk == ancestor)
+			return true;
+	}
+	return false;
+}
+
+// Todas as barras debaixo do painel, e nao so as filhas diretas: no Outfit
+// Studio cada linha e um painel proprio e a barra fica um nivel abaixo.
+std::vector<HWND> TrackbarsUnder(HWND host, HWND exclude) {
 	std::vector<HWND> out;
-	for (HWND child : ChildrenOf(host)) {
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0)
-			out.push_back(child);
+	for (HWND slider : FindDescendantsByClass(host, TRACKBAR_CLASSW)) {
+		// Se o painel escolhido por acaso contiver o de pose, as sete barras
+		// dele continuam de fora: zera-las apagaria a pose do usuario.
+		if (!IsUnder(slider, exclude))
+			out.push_back(slider);
 	}
 	return out;
 }
@@ -76,15 +90,22 @@ int ZeroTargetFor(int minimum, int maximum) {
 	return 0;
 }
 
-HWND PickSliderHost(HWND frame, HWND exclude) {
-	if (!frame)
-		return nullptr;
+namespace {
 
+// O ancestral `levels` niveis acima, ou nullptr se a arvore acabar antes.
+HWND AncestorOf(HWND window, int levels) {
+	for (int i = 0; i < levels && window; ++i)
+		window = GetParent(window);
+	return window;
+}
+
+// Procura os paineis num nivel so.
+HWND PickAtLevel(HWND frame, HWND exclude, int level) {
 	std::vector<HostCount> hosts;
 
 	for (HWND slider : FindDescendantsByClass(frame, TRACKBAR_CLASSW)) {
-		HWND host = GetParent(slider);
-		if (!host || host == exclude)
+		HWND host = AncestorOf(slider, level);
+		if (!host || host == exclude || host == frame)
 			continue;
 
 		// A visibilidade e perguntada ao PAINEL, nao a barra.
@@ -138,6 +159,27 @@ HWND PickSliderHost(HWND frame, HWND exclude) {
 	return best ? best->host : nullptr;
 }
 
+} // namespace
+
+HWND PickSliderHost(HWND frame, HWND exclude) {
+	if (!frame)
+		return nullptr;
+
+	// Sobe de nivel ate achar um painel que junte barras.
+	//
+	// No BodySlide as barras sao filhas diretas da area que rola, e o nivel 1
+	// resolve. No Outfit Studio NAO: cada linha de slider e um painel proprio,
+	// com o lapis, a caixa, o nome, a barra e a porcentagem dentro. Ali cada
+	// barra esta sozinha no pai dela, e agrupar por pai direto dava cento e
+	// trinta e um paineis de uma barra cada -- nenhum com as duas que a regra
+	// exige. Era por isso que a tecla nao achava nada.
+	for (int level = 1; level <= 4; ++level) {
+		if (HWND host = PickAtLevel(frame, exclude, level))
+			return host;
+	}
+	return nullptr;
+}
+
 namespace ZeroSliders {
 
 bool Install(HWND frame) {
@@ -169,7 +211,7 @@ bool Run() {
 		return false;
 	}
 
-	const std::vector<HWND> sliders = TrackbarChildren(host);
+	const std::vector<HWND> sliders = TrackbarsUnder(host, g_posePanel);
 	int changed = 0;
 
 	// Um painel cheio sao dezenas de barras, e cada uma redesenha ao mudar.
@@ -185,7 +227,10 @@ bool Run() {
 		if (static_cast<int>(SendMessageW(slider, TBM_GETPOS, 0, 0)) == target)
 			continue; // ja esta la; avisar de novo so gastaria um recalculo
 
-		WriteSlider(host, slider, target);
+		// O aviso vai para o PAI da barra, que e quem o trata. Com cada linha
+		// num painel proprio, mandar para o painel de cima nao chegaria a
+		// ninguem.
+		WriteSlider(GetParent(slider), slider, target);
 		++changed;
 	}
 

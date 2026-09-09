@@ -182,9 +182,30 @@ void CompactHost(HWND host) {
 	}
 }
 
+// Reaprende a regua enquanto a lista ainda esta inteira na tela.
+//
+// A regua medida na instalacao envelhece. Os grupos "Sliders" e "Bones" comecam
+// RECOLHIDOS, entao as linhas de cabecalho foram medidas coladas umas nas
+// outras; ao expandir um grupo o programa afasta tudo, e a regua velha passava
+// a puxar "26 bones" para cima, em cima dos sliders -- foi isso que apareceu
+// empilhado na tela.
+//
+// Roda ANTES de esconder qualquer coisa: depois de esconder a tela ja nao e
+// mais a regua. Enquanto nada esta escondido, ela e.
+void RefreshRulers() {
+	for (AsymRow& row : g_rows) {
+		if (!row.visible)
+			return; // ja filtrado: as posicoes atuais nao sao as naturais
+	}
+	for (AsymRow& row : g_rows)
+		row.top = static_cast<int>(RectInParent(row.check).top);
+}
+
 void ApplyFilter() {
 	if (g_rows.empty())
 		return;
+
+	RefreshRulers();
 
 	const std::wstring query = SearchText();
 	int shown = 0;
