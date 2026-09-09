@@ -150,6 +150,29 @@ bool BeginDrag(MSG* msg) {
 	g_grabOffset = static_cast<int>(cursor.y) - g_slotTops[static_cast<size_t>(index)];
 
 	LogF("reorder: peguei a linha %d de %d", index + 1, static_cast<int>(rows.size()));
+
+	// A geometria de UMA linha, uma unica vez por sessao.
+	//
+	// E o que falta para saber se cabe um botao de arrastar ao lado do lapis e
+	// da caixa, ou se seria preciso empurrar os controles do programa para
+	// abrir espaco. Sem a medida, decidir isso seria adivinhar de novo -- e
+	// adivinhar geometria ja custou tres versoes da busca do symmetrize.
+	static bool measured = false;
+	if (!measured) {
+		measured = true;
+		RECT rowRect = {};
+		GetWindowRect(msg->hwnd, &rowRect);
+		LogF("reorder: linha %ldx%ld, filhos:", rowRect.right - rowRect.left,
+			 rowRect.bottom - rowRect.top);
+
+		for (HWND child : ChildrenOf(msg->hwnd)) {
+			RECT rc = {};
+			GetWindowRect(child, &rc);
+			MapWindowPoints(nullptr, msg->hwnd, reinterpret_cast<POINT*>(&rc), 2);
+			LogF("  %ls em (%ld,%ld) %ldx%ld", ClassOf(child).c_str(), rc.left, rc.top,
+				 rc.right - rc.left, rc.bottom - rc.top);
+		}
+	}
 	return true;
 }
 

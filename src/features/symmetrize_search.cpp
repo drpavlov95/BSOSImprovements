@@ -132,6 +132,8 @@ std::vector<HWND> AllDescendants(HWND root) {
 // rola movendo os filhos, e as coordenadas de ontem apontariam para o lugar
 // errado. Como linha escondida nunca e movida, o menor topo do painel continua
 // sendo o do primeiro lugar, e da para reconstruir a regua a partir dele.
+void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed);
+
 void CompactHost(HWND host) {
 	std::vector<AsymRow*> rows;
 	for (AsymRow& row : g_rows) {
@@ -179,6 +181,87 @@ void CompactHost(HWND host) {
 						 placed[i] + cell.offsetY, 0, 0,
 						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 		}
+	}
+
+	ShrinkHostToFit(host, rows, placed);
+}
+
+// Encolhe o painel para caber so o que sobrou, e sobe o que vem depois dele.
+//
+// Compactar as linhas DENTRO do painel nao bastava: o painel continuava do
+// tamanho de antes, e sobrava um vazio enorme embaixo dos resultados, com a
+// secao seguinte empurrada para baixo dele.
+//
+// O que muda de altura e o painel que e filho DIRETO da area que rola -- o
+// grupo recolhivel inteiro, e nao so a caixa interna onde as linhas moram.
+// Encolher a de dentro nao move nada na tela.
+void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed) {
+	if (!g_scroll || rows.empty())
+		return;
+
+	// Sobe do painel das linhas ate o filho direto da area que rola.
+	HWND wrapper = host;
+	while (wrapper && GetParent(wrapper) != g_scroll) {
+		HWND parent = GetParent(wrapper);
+		if (!parent || parent == g_scroll)
+			break;
+		wrapper = parent;
+	}
+	if (!wrapper || GetParent(wrapper) != g_scroll)
+		return; // o painel nao pendura na area que rola: nao mexe
+
+	// Onde termina a ultima linha que sobrou.
+	int lastBottom = 0;
+	bool any = false;
+	for (size_t i = 0; i < rows.size(); ++i) {
+		if (!rows[i]->visible)
+			continue;
+		RECT rc = {};
+		GetWindowRect(rows[i]->check, &rc);
+		const int height = static_cast<int>(rc.bottom - rc.top);
+		const int bottom = placed[i] + height;
+		if (!any || bottom > lastBottom) {
+			lastBottom = bottom;
+			any = true;
+		}
+	}
+	if (!any)
+		lastBottom = 0;
+
+	RECT wrapperRect = {};
+	GetWindowRect(wrapper, &wrapperRect);
+	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&wrapperRect), 2);
+
+	// A altura do painel das linhas dentro do envelope, mais a folga que o
+	// envelope ja tinha em volta dela.
+	RECT hostRect = {};
+	GetWindowRect(host, &hostRect);
+	const int margin = (wrapperRect.bottom - wrapperRect.top) -
+					   static_cast<int>(hostRect.bottom - hostRect.top);
+
+	const int wanted = lastBottom + (margin > 0 ? margin : 0);
+	const int current = wrapperRect.bottom - wrapperRect.top;
+	const int delta = wanted - current;
+	if (delta == 0)
+		return;
+
+	SetWindowPos(wrapper, nullptr, 0, 0, wrapperRect.right - wrapperRect.left, wanted,
+				 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// E tudo que estava abaixo dele sobe ou desce junto.
+	for (HWND sibling : ChildrenOf(g_scroll)) {
+		if (sibling == wrapper)
+			continue;
+
+		RECT rc = {};
+		GetWindowRect(sibling, &rc);
+		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
+		if (rc.top < wrapperRect.bottom)
+			continue; // esta acima do painel: nao se mexe
+
+		SetWindowPos(sibling, nullptr, static_cast<int>(rc.left),
+					 static_cast<int>(rc.top) + delta, 0, 0,
+					 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 }
 

@@ -59,6 +59,24 @@ void ClearShiftOverride() {
 	g_shiftOverride = ShiftOverride::None;
 }
 
+// Reafirma o Shift sintetico durante o arrasto.
+//
+// Soltar uma vez no inicio nao basta: tecla modificadora SEGURADA gera
+// repeticoes, e cada repeticao devolve o estado para "apertada". O sintoma era
+// o arrasto comecar em pan e virar zoom no meio do caminho, como se os dois
+// comportamentos estivessem ligados ao mesmo tempo.
+//
+// Custa uma leitura de estado por movimento do mouse, e so mexe no teclado
+// quando ele saiu do lugar.
+void HoldShiftOverride() {
+	const bool down = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+	if (g_shiftOverride == ShiftOverride::Released && down)
+		SendShift(false);
+	else if (g_shiftOverride == ShiftOverride::Pressed && !down)
+		SendShift(true);
+}
+
 bool MenuUsesId(HMENU menu, UINT id, int depth) {
 	if (!menu || depth > 8)
 		return false;
@@ -370,6 +388,12 @@ void RewriteMouseMessage(MSG* msg) {
 			LogF("camera blender: zoom -- Shift apertado no sistema durante o arrasto");
 		}
 	}
+
+	// Durante o arrasto, o teclado tem que continuar contando a mesma historia.
+	// A repeticao da tecla segurada desfaz o que soltamos, e sem reafirmar o
+	// arrasto comeca em pan e vira zoom no meio.
+	if (msg->message == WM_MOUSEMOVE && g_shiftOverride != ShiftOverride::None)
+		HoldShiftOverride();
 
 	// Fim do arrasto: o teclado volta a ser do usuario.
 	if (wasDragging && !g_state.orbiting && !g_state.panning && !g_state.zooming)
