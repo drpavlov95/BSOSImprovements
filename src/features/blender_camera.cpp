@@ -23,6 +23,42 @@ bool g_enabled = false;
 bool g_installed = false;
 CameraState g_state;
 
+// O Shift que nos mesmos apertamos ou soltamos.
+//
+// O Outfit Studio decide entre pan e zoom lendo a tecla FISICA, e nao o
+// modificador que vem na mensagem. Isso foi medido: com Shift+meio ele dava
+// zoom mesmo com o MK_SHIFT retirado do wParam, e com Ctrl+meio dava pan mesmo
+// com o MK_SHIFT posto. Reescrever mensagem nao muda o que GetAsyncKeyState
+// responde -- so mexer no teclado de verdade muda.
+enum class ShiftOverride {
+	None,
+	Released, // soltamos um Shift que o usuario segura, para virar pan
+	Pressed,  // apertamos um Shift que o usuario nao segura, para virar zoom
+};
+
+ShiftOverride g_shiftOverride = ShiftOverride::None;
+
+void SendShift(bool down) {
+	INPUT input = {};
+	input.type = INPUT_KEYBOARD;
+	input.ki.wVk = VK_SHIFT;
+	input.ki.wScan = static_cast<WORD>(MapVirtualKeyW(VK_SHIFT, MAPVK_VK_TO_VSC));
+	input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+	SendInput(1, &input, sizeof(input));
+}
+
+// Desfaz o que apertamos. O que SOLTAMOS nao e desfeito de proposito.
+//
+// Se o usuario ainda segura o Shift, o sistema o ve solto ate ele soltar de
+// verdade -- inconveniente por alguns segundos e que se corrige sozinho. Se em
+// vez disso reapertassemos, e ele ja tivesse soltado no meio do arrasto,
+// ficaria um Shift preso no sistema inteiro, que e muito pior.
+void ClearShiftOverride() {
+	if (g_shiftOverride == ShiftOverride::Pressed)
+		SendShift(false);
+	g_shiftOverride = ShiftOverride::None;
+}
+
 bool MenuUsesId(HMENU menu, UINT id, int depth) {
 	if (!menu || depth > 8)
 		return false;
@@ -188,6 +224,7 @@ bool Install(HWND frame) {
 	Uninstall();
 	g_frame = frame;
 	g_enabled = Cfg().blenderCamera;
+	ClearShiftOverride();
 	g_state = CameraState();
 
 	g_canvas = FindLargestVisibleByClass(frame, L"wxGLCanvas");
@@ -245,6 +282,7 @@ void Uninstall() {
 	g_viewMenu = nullptr;
 	g_commandId = 0;
 	g_installed = false;
+	ClearShiftOverride();
 	g_state = CameraState();
 }
 
@@ -256,6 +294,7 @@ void SetEnabled(bool enabled) {
 	g_enabled = enabled;
 	// Sair no meio de um arrasto deixaria o estado preso em "orbitando", e a
 	// partir dai todo movimento do mouse viria com o botao trocado.
+	ClearShiftOverride();
 	g_state = CameraState();
 	UpdateCheckMark();
 }
@@ -265,6 +304,7 @@ void SetEnabled(bool enabled) {
 // botao direito esta pressionado, mesmo com o nosso estado ja limpo.
 void EndStuckDrag() {
 	const UINT closing = g_state.orbiting ? WM_RBUTTONUP : WM_MBUTTONUP;
+	ClearShiftOverride();
 	g_state = CameraState();
 
 	POINT cursor = {};
@@ -297,6 +337,15 @@ void RewriteMouseMessage(MSG* msg) {
 		return; // a mensagem atual segue intacta: o botao ja nao esta apertado
 	}
 
+	// Rede de seguranca do Shift sintetico: fora de um arrasto ele nao tem
+	// razao de existir. Um Shift preso no sistema inteiro seria o pior estrago
+	// que este mod poderia causar, entao qualquer mensagem que chegue sem
+	// arrasto em curso o desfaz.
+	if (!dragging && g_shiftOverride != ShiftOverride::None)
+		ClearShiftOverride();
+
+	const bool wasDragging = dragging;
+
 	UINT message = msg->message;
 	WPARAM wParam = msg->wParam;
 	if (!TranslateCameraMessage(g_state, message, wParam))
@@ -304,6 +353,27 @@ void RewriteMouseMessage(MSG* msg) {
 
 	msg->message = message;
 	msg->wParam = wParam;
+
+	// A traducao acabou de decidir o modo do arrasto. Agora o teclado precisa
+	// contar a mesma historia que a mensagem, porque e nele que o Outfit
+	// Studio olha.
+	if (!wasDragging) {
+		if (g_state.panning) {
+			// Pan e o meio SEM Shift. O usuario segura Shift, entao soltamos.
+			g_shiftOverride = ShiftOverride::Released;
+			SendShift(false);
+			LogF("camera blender: pan -- Shift solto no sistema durante o arrasto");
+		} else if (g_state.zooming) {
+			// Zoom e o meio COM Shift. O usuario segura Ctrl, entao apertamos.
+			g_shiftOverride = ShiftOverride::Pressed;
+			SendShift(true);
+			LogF("camera blender: zoom -- Shift apertado no sistema durante o arrasto");
+		}
+	}
+
+	// Fim do arrasto: o teclado volta a ser do usuario.
+	if (wasDragging && !g_state.orbiting && !g_state.panning && !g_state.zooming)
+		ClearShiftOverride();
 }
 
 } // namespace BlenderCamera
