@@ -112,8 +112,24 @@ bool BeginDrag(MSG* msg) {
 		if (rows[i] == msg->hwnd)
 			index = static_cast<int>(i);
 	}
-	if (index < 0)
+
+	if (index < 0) {
+		// Clique dentro do painel que NAO caiu numa linha.
+		//
+		// E a diferenca entre "o clique foi num controle, e esta certo passar"
+		// e "a area de pega nao existe onde eu achei que existia". As duas se
+		// parecem iguais na tela -- nada acontece -- e sem esta linha a segunda
+		// nao teria como ser diagnosticada.
+		for (HWND walk = msg->hwnd; walk; walk = GetParent(walk)) {
+			if (walk != host)
+				continue;
+			LogF("reorder: clique em %p (classe '%ls') dentro do painel, mas fora de linha -- %d linhas conhecidas",
+				 static_cast<void*>(msg->hwnd), ClassOf(msg->hwnd).c_str(),
+				 static_cast<int>(rows.size()));
+			break;
+		}
 		return false;
+	}
 	if (rows.size() < 2)
 		return false; // uma linha so nao tem para onde ir
 
