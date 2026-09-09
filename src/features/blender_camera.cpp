@@ -102,7 +102,7 @@ void UnsubclassHere(void*) {
 } // namespace
 
 bool DragWasReleasedOutside(const CameraState& state, UINT message, bool middleDown) {
-	if (!state.orbiting && !state.panning)
+	if (!state.orbiting && !state.panning && !state.zooming)
 		return false;
 	if (message != WM_MOUSEMOVE)
 		return false;
@@ -113,9 +113,18 @@ bool TranslateCameraMessage(CameraState& state, UINT& message, WPARAM& wParam) {
 	switch (message) {
 		case WM_MBUTTONDOWN:
 		case WM_MBUTTONDBLCLK: {
+			// Ctrl+meio e o zoom do Blender. No Outfit Studio o zoom fino e
+			// Shift+meio, entao um modificador vira o outro.
+			if (wParam & MK_CONTROL) {
+				state.zooming = true;
+				wParam &= ~static_cast<WPARAM>(MK_CONTROL);
+				wParam |= MK_SHIFT;
+				return true;
+			}
+
+			// Shift+meio e o pan do Blender. No Outfit Studio o pan e o meio
+			// PURO -- com Shift ele faz zoom -- entao o Shift precisa sair.
 			if (wParam & MK_SHIFT) {
-				// Shift+meio ja e o pan do Outfit Studio. So o Shift sai, para
-				// nao acionar de tabela algum comportamento preso a ele.
 				state.panning = true;
 				wParam &= ~static_cast<WPARAM>(MK_SHIFT);
 				return true;
@@ -141,6 +150,12 @@ bool TranslateCameraMessage(CameraState& state, UINT& message, WPARAM& wParam) {
 				wParam &= ~static_cast<WPARAM>(MK_SHIFT);
 				return true;
 			}
+			if (state.zooming) {
+				state.zooming = false;
+				wParam &= ~static_cast<WPARAM>(MK_CONTROL);
+				wParam |= MK_SHIFT;
+				return true;
+			}
 			return false;
 
 		case WM_MOUSEMOVE:
@@ -153,6 +168,11 @@ bool TranslateCameraMessage(CameraState& state, UINT& message, WPARAM& wParam) {
 			}
 			if (state.panning) {
 				wParam &= ~static_cast<WPARAM>(MK_SHIFT);
+				return true;
+			}
+			if (state.zooming) {
+				wParam &= ~static_cast<WPARAM>(MK_CONTROL);
+				wParam |= MK_SHIFT;
 				return true;
 			}
 			return false;
@@ -265,7 +285,7 @@ void RewriteMouseMessage(MSG* msg) {
 	// Fora da view 3D nada e traduzido -- MENOS o fim de um arrasto que ja
 	// comecou. Se o botao for solto com o ponteiro em outra janela e essa
 	// mensagem for ignorada, o estado fica preso em "orbitando" para sempre.
-	const bool dragging = g_state.orbiting || g_state.panning;
+	const bool dragging = g_state.orbiting || g_state.panning || g_state.zooming;
 	if (msg->hwnd != g_canvas && !dragging)
 		return;
 

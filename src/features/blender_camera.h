@@ -4,17 +4,27 @@
 
 // Navegacao da view 3D no esquema do Blender.
 //
-// No Outfit Studio o botao DIREITO orbita e o do MEIO faz pan. No Blender e o
-// do meio que orbita, e Shift+meio que faz pan. A traducao e so essa: o botao
-// do meio sem Shift passa a chegar no programa como se fosse o direito.
+// O vanilla dos dois programas, lado a lado:
+//
+//   Outfit Studio          Blender
+//   meio ......... pan     meio ......... orbita
+//   direito ...... gira    Shift+meio ... pan
+//   Shift+meio ... zoom    Ctrl+meio .... zoom
+//   roda ......... zoom    roda ......... zoom
+//
+// A roda ja e a mesma nos dois. O resto e uma permutacao de tres:
+//
+//   meio        -> direito     (orbitar)
+//   Shift+meio  -> meio        (pan)
+//   Ctrl+meio   -> Shift+meio  (zoom)
+//
+// O botao direito continua girando. Tirar isso nao acrescentaria nada e
+// quebraria o habito de quem usa os dois programas.
 //
 // Nada e consumido nem sintetizado -- a mensagem original e reescrita e segue
 // pelo caminho de sempre. E o mesmo cuidado do resize de brush: engolir a
 // mensagem e mandar outra no lugar mata o tratamento interno que redesenha a
 // cena.
-//
-// O botao direito continua orbitando. Tirar isso nao acrescentaria nada e
-// quebraria o habito de quem usa os dois.
 namespace BlenderCamera {
 
 bool Install(HWND frame);
@@ -36,6 +46,7 @@ void RewriteMouseMessage(MSG* msg);
 struct CameraState {
 	bool orbiting = false;
 	bool panning = false;
+	bool zooming = false;
 };
 
 // Traduz uma mensagem de mouse do esquema do Blender para o do Outfit Studio.

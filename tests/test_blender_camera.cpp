@@ -76,6 +76,44 @@ TEST(ShiftMiddleStaysPan) {
 	return true;
 }
 
+TEST(CtrlMiddleZoomsThroughTheOutfitStudioZoomDrag) {
+	CameraState state;
+
+	// A permutacao de tres: no Blender Ctrl+meio faz zoom, e no Outfit Studio o
+	// zoom de arrasto e Shift+meio. Um modificador vira o outro.
+	//
+	// Sem este ramo, Ctrl+meio caia no caso "sem Shift" e ORBITAVA -- o
+	// contrario do que a tecla quer dizer.
+	Translated down = Run(state, WM_MBUTTONDOWN, MK_MBUTTON | MK_CONTROL);
+	TEST_ASSERT(down.changed);
+	TEST_ASSERT(down.message == WM_MBUTTONDOWN); // o botao nao muda
+	TEST_ASSERT((down.wParam & MK_SHIFT) != 0);  // o modificador sim
+	TEST_ASSERT((down.wParam & MK_CONTROL) == 0);
+	TEST_ASSERT(state.zooming);
+	TEST_ASSERT(!state.orbiting && !state.panning);
+
+	Translated move = Run(state, WM_MOUSEMOVE, MK_MBUTTON | MK_CONTROL);
+	TEST_ASSERT((move.wParam & MK_SHIFT) != 0);
+	TEST_ASSERT((move.wParam & MK_CONTROL) == 0);
+
+	Translated up = Run(state, WM_MBUTTONUP, MK_CONTROL);
+	TEST_ASSERT(up.message == WM_MBUTTONUP);
+	TEST_ASSERT(!state.zooming);
+	return true;
+}
+
+TEST(ControlWinsOverShiftAtThePress) {
+	// Com os dois apertados manda o Ctrl, porque no Blender e o Ctrl que
+	// carrega o zoom. Deixar o Shift decidir daria pan quando o usuario pediu
+	// zoom.
+	CameraState state;
+	Translated down = Run(state, WM_MBUTTONDOWN, MK_MBUTTON | MK_CONTROL | MK_SHIFT);
+	TEST_ASSERT(state.zooming);
+	TEST_ASSERT(!state.panning);
+	TEST_ASSERT((down.wParam & MK_SHIFT) != 0);
+	return true;
+}
+
 TEST(DragModeIsDecidedAtThePress) {
 	CameraState state;
 
