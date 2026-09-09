@@ -28,10 +28,6 @@ void Uninstall();
 
 // Logica pura, exposta para teste.
 
-// O acelerador de um rotulo de menu cru: o que vem depois do \t.
-// "Transform\tF" -> "F". Sem \t, ou vazio depois dele -> vazio.
-std::wstring AcceleratorFromMenuLabel(const std::wstring& rawLabel);
-
 // "K", "Shift+E", "Ctrl+Alt+K". Hotkey invalida -> vazio.
 std::wstring FormatHotkey(const Hotkey& key);
 
@@ -41,7 +37,3 @@ std::wstring FormatHotkey(const Hotkey& key);
 // uma subclasse nossa antes de chegar ao controle, e sem isso o sufixo sairia
 // duplicado.
 std::wstring ComposeTooltip(const std::wstring& original, const std::wstring& accel);
-
-// Percorre a menubar inteira e devolve "id de comando -> acelerador" para todo
-// item que tenha um.
-std::map<UINT, std::wstring> CollectMenuAccelerators(HMENU bar);

@@ -17,7 +17,12 @@ namespace {
 const UINT_PTR kSubclassId = 0xB50C;
 
 HWND g_frame = nullptr;
-std::map<UINT, std::wstring> g_accel;
+
+// Texto original do tooltip -> atalho a mostrar. E o mapa que a reescrita
+// consulta, e a unica chave que o wx nos deixa: o id de comando da ferramenta
+// de barra nao e o do item de menu de mesmo nome.
+std::map<std::wstring, std::wstring> g_byTooltip;
+
 std::vector<HWND> g_subclassed;
 
 // O texto reescrito precisa sobreviver ao retorno da notificacao: o controle de
@@ -45,17 +50,20 @@ void RewriteTooltip(NMTTDISPINFOW* info) {
 	if (!info)
 		return;
 
-	// Com TTF_IDISHWND o idFrom e um HWND e nao um id de comando -- e o caso
-	// dos tooltips que o wx poe em controles avulsos. Ali nao ha ferramenta de
-	// barra nenhuma para casar.
-	if (info->uFlags & TTF_IDISHWND)
-		return;
-
-	auto found = g_accel.find(static_cast<UINT>(info->hdr.idFrom));
-	if (found == g_accel.end() || found->second.empty())
-		return;
-
+	// O casamento e pelo TEXTO, e nao pelo id de comando.
+	//
+	// A primeira versao usava o id, na suposicao de que o wx daria o mesmo
+	// XRCID para a ferramenta de barra e o item de menu de mesmo nome. Nao da:
+	// das quarenta e cinco ferramentas do Outfit Studio, ZERO casaram. O texto
+	// do tooltip, esse, vem do XRC intacto.
 	const std::wstring original = CurrentText(info);
+	if (original.empty())
+		return;
+
+	auto found = g_byTooltip.find(original);
+	if (found == g_byTooltip.end() || found->second.empty())
+		return;
+
 	const std::wstring composed = ComposeTooltip(original, found->second);
 	if (composed == original)
 		return;
@@ -93,7 +101,23 @@ LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
 	// O texto normal e escrito pelo wx durante esta chamada; so depois dela ha
 	// o que reescrever.
 	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
-	RewriteTooltip(reinterpret_cast<NMTTDISPINFOW*>(lParam));
+	auto* info = reinterpret_cast<NMTTDISPINFOW*>(lParam);
+
+	// Uma linha na primeira notificacao da sessao, e so uma.
+	//
+	// Sem ela nao ha como separar "a notificacao nunca chega" de "chega e o
+	// texto nao casa", e as duas se parecem exatamente igual na tela: o
+	// tooltip sai sem o atalho. Foi essa ambiguidade que fez a versao anterior
+	// falhar em silencio.
+	static bool logged = false;
+	if (!logged && info) {
+		logged = true;
+		LogF("tooltips: primeira notificacao -- janela %p, idFrom=%u, flags=0x%04X, texto '%ls'",
+			 static_cast<void*>(hwnd), static_cast<unsigned>(info->hdr.idFrom),
+			 static_cast<unsigned>(info->uFlags), CurrentText(info).c_str());
+	}
+
+	RewriteTooltip(info);
 	return result;
 }
 
@@ -121,57 +145,21 @@ void Remember(HWND candidate) {
 	g_subclassed.push_back(candidate);
 }
 
-// Sobrescreve o acelerador de um comando identificado pelo name= do XRC.
-void OverrideAccelerator(HMENU bar, const std::wstring& xrc, const RemapEntry& entry,
-						 const char* origin) {
-	const MenuTrail trail = ResolveMenuTrail(xrc.c_str(), entry.xrcName.c_str());
-	if (trail.empty()) {
-		LogF("tooltips: '%s' (%s) nao existe no XRC, ignorado", entry.xrcName.c_str(), origin);
-		return;
-	}
-
-	const UINT id = CommandIdAtLabeledPath(bar, trail.path, trail.labels);
-	if (id == 0) {
-		LogF("tooltips: '%s' (%s) nao tem id no menu vivo, ignorado", entry.xrcName.c_str(), origin);
-		return;
-	}
-
-	const std::wstring text = FormatHotkey(entry.key);
-	if (text.empty())
-		return;
-
-	g_accel[id] = text;
-	LogF("tooltips: '%s' (%s) passa a mostrar '%ls'", entry.xrcName.c_str(), origin, text.c_str());
-}
-
-// Registra quais ferramentas de barra ficaram com atalho e quais nao.
+// Aplica as sobrescritas do INI por cima dos aceleradores lidos do XRC.
 //
-// E o que permite descobrir pelo log o que vale a pena por em
-// [TooltipShortcuts]: as teclas que o Outfit Studio trata no proprio codigo --
-// os numeros que trocam de brush -- nao aparecem em recurso nenhum que de para
-// ler de fora.
-void LogToolCoverage(HWND toolbar) {
-	const int count = static_cast<int>(SendMessageW(toolbar, TB_BUTTONCOUNT, 0, 0));
-	int withAccel = 0;
-	int without = 0;
-
-	for (int i = 0; i < count; ++i) {
-		TBBUTTON button = {};
-		if (!SendMessageW(toolbar, TB_GETBUTTON, static_cast<WPARAM>(i),
-						  reinterpret_cast<LPARAM>(&button)))
-			continue;
-		if (button.idCommand == 0)
-			continue; // separador
-
-		auto found = g_accel.find(static_cast<UINT>(button.idCommand));
-		if (found != g_accel.end() && !found->second.empty())
-			++withAccel;
-		else
-			++without;
+// [Remap] muda a tecla de verdade, entao o tooltip tem que mostrar a nova;
+// [TooltipShortcuts] so rotula, e por isso vem depois e e a palavra final.
+void ApplyOverrides(std::map<std::string, std::wstring>& accel) {
+	for (const RemapEntry& entry : Cfg().remaps) {
+		const std::wstring text = FormatHotkey(entry.key);
+		if (!text.empty())
+			accel[entry.xrcName] = text;
 	}
-
-	LogF("tooltips: barra %p tem %d ferramentas -- %d com atalho, %d sem",
-		 static_cast<void*>(toolbar), count, withAccel, without);
+	for (const RemapEntry& entry : Cfg().tooltipShortcuts) {
+		const std::wstring text = FormatHotkey(entry.key);
+		if (!text.empty())
+			accel[entry.xrcName] = text;
+	}
 }
 
 bool Enabled(const Config& cfg) {
@@ -179,26 +167,6 @@ bool Enabled(const Config& cfg) {
 }
 
 } // namespace
-
-std::wstring AcceleratorFromMenuLabel(const std::wstring& rawLabel) {
-	const size_t tab = rawLabel.find(L'\t');
-	if (tab == std::wstring::npos)
-		return std::wstring();
-
-	std::wstring accel = rawLabel.substr(tab + 1);
-
-	// O rotulo pode trazer mais de um \t: o Windows usa o primeiro para separar
-	// o acelerador, e o que vier depois e alinhamento.
-	const size_t another = accel.find(L'\t');
-	if (another != std::wstring::npos)
-		accel.resize(another);
-
-	const size_t begin = accel.find_first_not_of(L" \r\n");
-	if (begin == std::wstring::npos)
-		return std::wstring();
-	const size_t end = accel.find_last_not_of(L" \r\n");
-	return accel.substr(begin, end - begin + 1);
-}
 
 std::wstring FormatHotkey(const Hotkey& key) {
 	if (!key.IsValid())
@@ -231,72 +199,41 @@ std::wstring ComposeTooltip(const std::wstring& original, const std::wstring& ac
 	return original + suffix;
 }
 
-std::map<UINT, std::wstring> CollectMenuAccelerators(HMENU bar) {
-	std::map<UINT, std::wstring> out;
-	if (!bar)
-		return out;
-
-	// Pilha explicita em vez de recursao. Um HMENU pode conter a si mesmo --
-	// nada na API impede -- e a recursao ingenua nunca voltaria.
-	std::vector<HMENU> pending{bar};
-	std::vector<HMENU> seen;
-
-	while (!pending.empty()) {
-		HMENU menu = pending.back();
-		pending.pop_back();
-
-		bool repeated = false;
-		for (HMENU already : seen) {
-			if (already == menu) {
-				repeated = true;
-				break;
-			}
-		}
-		if (repeated)
-			continue;
-		seen.push_back(menu);
-
-		const int count = GetMenuItemCount(menu);
-		for (int i = 0; i < count; ++i) {
-			if (HMENU sub = GetSubMenu(menu, i)) {
-				pending.push_back(sub);
-				continue;
-			}
-
-			const UINT id = CommandIdAt(menu, i);
-			if (id == 0)
-				continue; // separador
-
-			const std::wstring accel = AcceleratorFromMenuLabel(MenuRawTextAt(menu, i));
-			if (!accel.empty())
-				out[id] = accel;
-		}
-	}
-	return out;
-}
-
 namespace ShortcutTooltips {
 
 bool Install(HWND frame) {
 	Uninstall();
 	g_frame = frame;
 
-	HMENU bar = GetMenu(frame);
-	if (!bar) {
-		LogF("tooltips: o frame nao tem menubar, e e dela que os atalhos saem");
+	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
+	const XrcShortcuts shortcuts = ResolveXrcShortcuts(xrc.c_str());
+	if (shortcuts.toolByTooltip.empty()) {
+		LogF("tooltips: nenhuma ferramenta com tooltip no XRC");
 		return false;
 	}
 
-	g_accel = CollectMenuAccelerators(bar);
-	LogF("tooltips: %d comandos tem acelerador no menu", static_cast<int>(g_accel.size()));
+	std::map<std::string, std::wstring> accel = shortcuts.acceleratorByName;
+	ApplyOverrides(accel);
 
-	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	// A ordem importa: [Remap] troca a tecla de verdade, e [TooltipShortcuts] e
-	// a palavra final do usuario sobre o que exibir.
-	for (const RemapEntry& entry : Cfg().remaps)
-		OverrideAccelerator(bar, xrc, entry, "remap");
-	for (const RemapEntry& entry : Cfg().tooltipShortcuts)
-		OverrideAccelerator(bar, xrc, entry, "tooltip");
+	for (const auto& tool : shortcuts.toolByTooltip) {
+		// Nome vazio e tooltip repetido em duas ferramentas: sem saber qual e
+		// qual, melhor nenhum atalho que o atalho da outra.
+		if (tool.second.empty())
+			continue;
+
+		auto found = accel.find(tool.second);
+		if (found == accel.end() || found->second.empty())
+			continue;
+
+		g_byTooltip[tool.first] = found->second;
+	}
+
+	LogF("tooltips: %d ferramentas com tooltip no XRC, %d comandos com acelerador, %d casadas",
+		 static_cast<int>(shortcuts.toolByTooltip.size()),
+		 static_cast<int>(accel.size()), static_cast<int>(g_byTooltip.size()));
+
+	if (g_byTooltip.empty())
+		return false;
 
 	const std::vector<HWND> toolbars = FindDescendantsByClass(frame, TOOLBARCLASSNAMEW);
 	if (toolbars.empty()) {
@@ -310,7 +247,6 @@ bool Install(HWND frame) {
 	// subclassados -- ComposeTooltip e idempotente justamente porque assim a
 	// mensagem pode passar pelos dois.
 	for (HWND toolbar : toolbars) {
-		LogToolCoverage(toolbar);
 		Remember(toolbar);
 		Remember(GetParent(toolbar));
 	}
@@ -329,7 +265,7 @@ void Uninstall() {
 	if (!g_subclassed.empty() && g_frame)
 		RunOnUiThread(g_frame, UnsubclassHere, nullptr);
 	g_subclassed.clear();
-	g_accel.clear();
+	g_byTooltip.clear();
 	g_text.clear();
 	g_frame = nullptr;
 }

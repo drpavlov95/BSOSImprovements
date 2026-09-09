@@ -55,7 +55,8 @@ struct Token {
 	Kind kind = End;
 	std::string name;
 	std::string cls;
-	std::string label; // <label> do proprio objeto, ainda cru
+	std::string label;   // <label> do proprio objeto, ainda cru
+	std::string tooltip; // <tooltip>, idem
 };
 
 std::string DecodeEntities(const std::string& s) {
@@ -149,17 +150,18 @@ public:
 			t.kind = (!tag.empty() && tag.back() == '/') ? Token::SelfClose : Token::Open;
 			t.cls = Attribute(tag, "class");
 			t.name = Attribute(tag, "name");
-			t.label = PeekLabel();
+			t.label = PeekTag("<label>", "</label>");
+			t.tooltip = PeekTag("<tooltip>", "</tooltip>");
 			return t;
 		}
 	}
 
 private:
-	// O <label> deste objeto, sem consumir nada. E o proprio label so se vier
-	// antes de qualquer <object> filho e antes do </object> que fecha este --
-	// senao seria o label de outro item.
-	std::string PeekLabel() const {
-		const size_t open = text_.find("<label>", pos_);
+	// Uma tag simples DESTE objeto, sem consumir nada. So conta se vier antes
+	// de qualquer <object> filho e antes do </object> que fecha este -- senao
+	// seria a tag de outro item.
+	std::string PeekTag(const char* openTag, const char* closeTag) const {
+		const size_t open = text_.find(openTag, pos_);
 		if (open == std::string::npos)
 			return std::string();
 
@@ -171,11 +173,11 @@ private:
 		if (close != std::string::npos && close < open)
 			return std::string();
 
-		const size_t end = text_.find("</label>", open);
+		const size_t end = text_.find(closeTag, open);
 		if (end == std::string::npos)
 			return std::string();
 
-		const size_t begin = open + 7; // strlen("<label>")
+		const size_t begin = open + strlen(openTag);
 		return text_.substr(begin, end - begin);
 	}
 
@@ -208,6 +210,116 @@ bool WalkChildren(Scanner& scanner, const std::string& target, MenuTrail& trail)
 }
 
 } // namespace
+
+namespace {
+
+std::wstring WidenUtf8(const std::string& text) {
+	if (text.empty())
+		return std::wstring();
+
+	const int wide = MultiByteToWideChar(CP_UTF8, 0, text.c_str(),
+										 static_cast<int>(text.size()), nullptr, 0);
+	if (wide <= 0)
+		return std::wstring();
+
+	std::wstring out(static_cast<size_t>(wide), L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+						out.data(), wide);
+	return out;
+}
+
+std::wstring TrimWide(const std::wstring& s) {
+	const size_t begin = s.find_first_not_of(L" \t\r\n");
+	if (begin == std::wstring::npos)
+		return std::wstring();
+	const size_t end = s.find_last_not_of(L" \t\r\n");
+	return s.substr(begin, end - begin + 1);
+}
+
+// O texto de um tooltip do XRC, pronto para comparar com o que chega na tela.
+//
+// O "\n" do XRC e literal -- barra e ene, dois caracteres -- e o wx o converte
+// em quebra de linha de verdade ao carregar. Sem essa conversao, o tooltip de
+// duas linhas nunca casaria.
+std::wstring NormalizeXrcTooltip(const std::string& raw) {
+	const std::string decoded = DecodeEntities(raw);
+
+	std::wstring out;
+	const std::wstring wide = WidenUtf8(decoded);
+	for (size_t i = 0; i < wide.size(); ++i) {
+		if (wide[i] == L'\\' && i + 1 < wide.size() && wide[i + 1] == L'n') {
+			out.push_back(L'\n');
+			++i;
+			continue;
+		}
+		out.push_back(wide[i]);
+	}
+	return TrimWide(out);
+}
+
+// O acelerador de um rotulo do XRC: o que vem depois do \t, que ali tambem e
+// literal.
+std::wstring AcceleratorFromXrcLabel(const std::string& raw) {
+	const std::string decoded = DecodeEntities(raw);
+
+	size_t cut = decoded.find("\\t");
+	size_t skip = 2;
+	if (cut == std::string::npos) {
+		cut = decoded.find('\t');
+		skip = 1;
+	}
+	if (cut == std::string::npos)
+		return std::wstring();
+
+	return TrimWide(WidenUtf8(decoded.substr(cut + skip)));
+}
+
+} // namespace
+
+XrcShortcuts ResolveXrcShortcuts(const wchar_t* xrcFile) {
+	XrcShortcuts out;
+	if (!xrcFile)
+		return out;
+
+	const std::string xml = ReadWholeFile(xrcFile);
+	if (xml.empty()) {
+		LogF("xrcmap: nao consegui ler o XRC para os atalhos de tooltip");
+		return out;
+	}
+
+	Scanner scanner(xml);
+	for (;;) {
+		Token token = scanner.Next();
+		if (token.kind == Token::End)
+			break;
+		if (token.name.empty())
+			continue;
+
+		if (token.cls == "tool") {
+			const std::wstring tooltip = NormalizeXrcTooltip(token.tooltip);
+			if (tooltip.empty())
+				continue;
+
+			// Dois tooltips iguais nao podem escolher sozinhos qual ferramenta
+			// e qual. Melhor nenhum atalho que o atalho da outra.
+			auto existing = out.toolByTooltip.find(tooltip);
+			if (existing != out.toolByTooltip.end()) {
+				existing->second.clear();
+				continue;
+			}
+			out.toolByTooltip[tooltip] = token.name;
+			continue;
+		}
+
+		if (token.cls == "wxMenuItem") {
+			const std::wstring accel = AcceleratorFromXrcLabel(token.label);
+			if (!accel.empty())
+				out.acceleratorByName[token.name] = accel;
+		}
+	}
+
+	return out;
+}
 
 MenuPath ResolveMenuPath(const wchar_t* xrcFile, const char* xrcName) {
 	return ResolveMenuTrail(xrcFile, xrcName).path;

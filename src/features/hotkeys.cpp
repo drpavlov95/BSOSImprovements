@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "core/diag.h"
 #include "core/host.h"
 #include "core/log.h"
 #include "core/ui_thread.h"
@@ -162,6 +163,20 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 	if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN)
 		return CallNextHookEx(g_hook, code, wParam, lParam);
 
+	// Ctrl+Shift+D despeja a janela em primeiro plano no log.
+	//
+	// Fica ANTES da guarda de frame de proposito: o que mais precisa ser
+	// despejado sao os dialogos modais, e dialogo com dono nao e FILHO do
+	// frame, entao a guarda o descartaria justamente no caso que importa.
+	if (Cfg().dumpWindows && msg->wParam == 'D' && (GetKeyState(VK_CONTROL) & 0x8000) &&
+		(GetKeyState(VK_SHIFT) & 0x8000)) {
+		Diag::DumpWindowTree(GetForegroundWindow(), "janela em primeiro plano");
+		msg->message = WM_NULL;
+		msg->wParam = 0;
+		msg->lParam = 0;
+		return CallNextHookEx(g_hook, code, wParam, lParam);
+	}
+
 	// Durante o arrasto de redimensionar, o modo e exclusivo: so as teclas que
 	// o encerram valem. Sem isto, apertar B no meio do arrasto trocaria o shape
 	// selecionado enquanto o brush ainda esta sendo ajustado.
@@ -219,9 +234,11 @@ void InstallHookHere(void*) {
 }
 
 bool HotkeysEnabled(const Config& cfg) {
+	// A camera aparece no menu mesmo desligada, mas so se o modulo rodar. Quem
+	// desligou tudo continua sem nada -- inclusive sem o item de menu.
 	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
 		   cfg.blenderCamera || cfg.zeroSlidersHotkey || cfg.stabilizerRadius > 0 ||
-		   !cfg.remaps.empty();
+		   cfg.dumpWindows || !cfg.remaps.empty();
 }
 
 // O BodySlide so tem uma tecla, e nao tem menubar nem view 3D. Tudo o mais que
@@ -277,7 +294,12 @@ bool Install(HWND frame) {
 			AddBinding(cfg.brushStrength, "forca do brush", ActionBeginBrushStrength);
 	}
 
-	const bool camera = outfitStudio && cfg.blenderCamera && BlenderCamera::Install(frame);
+	// A camera e instalada SEMPRE, ligada ou nao no INI.
+	//
+	// A versao anterior so criava o item de menu quando ela ja estava ligada,
+	// ou seja: para achar a opcao voce precisava ja saber que ela existia. O
+	// item aparece desmarcado e nao muda nada ate ser clicado.
+	const bool camera = outfitStudio && BlenderCamera::Install(frame);
 	const bool stabilizer = outfitStudio && StrokeStabilizer::Install(frame);
 
 	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))

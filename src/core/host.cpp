@@ -2,6 +2,7 @@
 
 #include <cwctype>
 
+#include "core/diag.h"
 #include "core/log.h"
 #include "features/registry.h"
 
@@ -119,6 +120,11 @@ DWORD WINAPI BootstrapThread(LPVOID) {
 
 	LogF("janela principal: %p", static_cast<void*>(g_frame));
 	InstallFeatures();
+
+	// Depois das features, nao antes: assim o log mostra o que cada uma achou e
+	// so entao a estrutura crua contra a qual conferir.
+	if (g_config.dumpWindows)
+		Diag::DumpEverything(g_frame);
 	return 0;
 }
 

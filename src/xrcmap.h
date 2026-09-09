@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -34,3 +35,22 @@ struct MenuTrail {
 };
 
 MenuTrail ResolveMenuTrail(const wchar_t* xrcFile, const char* xrcName);
+
+// Ferramentas de barra e aceleradores de menu, num unico passe pelo arquivo.
+//
+// As duas coisas vem juntas porque a LIGACAO entre elas e o que interessa: a
+// ferramenta de barra e reconhecida pelo TEXTO do tooltip dela, e o atalho sai
+// do item de menu que tem o mesmo name=.
+//
+// Reconhecer pelo texto, e nao pelo id de comando, foi aprendido na marra: o
+// wx NAO da o mesmo id para a ferramenta e para o item de menu de mesmo nome.
+// Casar por id nao acertou uma unica das quarenta e cinco ferramentas.
+//
+// O preco e que numa instalacao traduzida o texto vivo nao bate com o do XRC,
+// que fica em ingles. Ali nada acontece, que e a degradacao certa.
+struct XrcShortcuts {
+	std::map<std::wstring, std::string> toolByTooltip;     // texto do tooltip -> name
+	std::map<std::string, std::wstring> acceleratorByName; // name -> "Shift+5"
+};
+
+XrcShortcuts ResolveXrcShortcuts(const wchar_t* xrcFile);

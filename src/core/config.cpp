@@ -208,5 +208,6 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.tooltipShortcuts = ReadKeySection(iniPath, L"TooltipShortcuts");
 
 	c.logFile = ReadBool(iniPath, L"Debug", L"LogFile", c.logFile);
+	c.dumpWindows = ReadBool(iniPath, L"Debug", L"DumpWindows", c.dumpWindows);
 	return c;
 }

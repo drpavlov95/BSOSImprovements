@@ -1,36 +1,8 @@
-// De onde sai o atalho que vai para o tooltip, e a reescrita da notificacao.
+// De onde sai o atalho que vai para o tooltip, e a composicao do texto.
 #include "test_util.h"
 
-#include <commctrl.h>
-
 #include "features/shortcut_tooltips.h"
-
-TEST(ReadsAcceleratorOutOfMenuLabels) {
-	// O formato do Windows: nome, tab, acelerador. E o mesmo que o Outfit
-	// Studio usa nos rotulos do XRC.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Transform\tF") == L"F");
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Conform Selected\tCtrl+C") == L"Ctrl+C");
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Delete Slider\tCtrl+Del") == L"Ctrl+Del");
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Front\tShift+1") == L"Shift+1");
-
-	// O mnemonico fica onde esta: ele pertence ao nome, nao ao acelerador.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"&Undo\tCtrl+Z") == L"Ctrl+Z");
-
-	// Sem tab nao ha acelerador -- e o caso da maioria dos itens.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"New Project").empty());
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"").empty());
-
-	// Tab sem nada util depois nao pode virar um "(  )" no tooltip.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Algo\t").empty());
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Algo\t   ").empty());
-
-	// So o primeiro tab separa; o resto e alinhamento e nao entra.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Algo\tF\tlixo") == L"F");
-
-	// Espaco em volta do acelerador nao pode vazar para dentro do parenteses.
-	TEST_ASSERT(AcceleratorFromMenuLabel(L"Algo\t  Ctrl+K  ") == L"Ctrl+K");
-	return true;
-}
+#include "xrcmap.h"
 
 TEST(FormatsHotkeysTheWayMenusDo) {
 	TEST_ASSERT(FormatHotkey(Hotkey{'K', false, false, false}) == L"K");
@@ -68,149 +40,74 @@ TEST(ComposesTooltipWithoutDuplicating) {
 	return true;
 }
 
-namespace {
+TEST(MapsRealToolTooltipsToRealAccelerators) {
+	const wchar_t* xrc = L"tests\\data\\OutfitStudio.xrc";
+	if (GetFileAttributesW(xrc) == INVALID_FILE_ATTRIBUTES) {
+		std::printf("\n      PULADO: copie OutfitStudio.xrc para tests\\data\\ para rodar\n      ");
+		return true;
+	}
 
-// Menubar de mentira com a mesma forma da do Outfit Studio: um menu de topo,
-// um submenu dentro dele, itens com e sem acelerador.
-HMENU BuildFakeMenuBar() {
-	HMENU tools = CreatePopupMenu();
-	AppendMenuW(tools, MF_STRING, 4321, L"Transform\tF");
-	AppendMenuW(tools, MF_STRING, 4322, L"Pivot\tP");
-	AppendMenuW(tools, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(tools, MF_STRING, 4323, L"Merge Vertex");
+	const XrcShortcuts shortcuts = ResolveXrcShortcuts(xrc);
 
-	HMENU brushes = CreatePopupMenu();
-	AppendMenuW(brushes, MF_STRING, 4324, L"Inflate");
+	// Este e o teste que a versao anterior nao tinha, e por isso ela foi para
+	// as maos do usuario sem funcionar: ele percorre a MESMA ligacao que a
+	// feature percorre, com o arquivo de verdade.
+	//
+	// O texto e exatamente o que aparece na tela ao passar o mouse.
+	auto transform = shortcuts.toolByTooltip.find(
+		L"Shows a transform tool to manipulate shapes and vertices with.");
+	TEST_ASSERT(transform != shortcuts.toolByTooltip.end());
+	TEST_ASSERT(transform->second == "btnTransform");
 
-	AppendMenuW(tools, MF_POPUP, reinterpret_cast<UINT_PTR>(brushes), L"Current Tool");
+	auto perspective = shortcuts.toolByTooltip.find(L"Toggle perspective view.");
+	TEST_ASSERT(perspective != shortcuts.toolByTooltip.end());
+	TEST_ASSERT(perspective->second == "btnViewPerspective");
 
-	HMENU bar = CreateMenu();
-	AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"Tool");
-	return bar;
-}
+	// E o nome leva ao acelerador do item de menu correspondente.
+	TEST_ASSERT(shortcuts.acceleratorByName.at("btnTransform") == L"F");
+	TEST_ASSERT(shortcuts.acceleratorByName.at("btnViewPerspective") == L"Shift+5");
+	TEST_ASSERT(shortcuts.acceleratorByName.at("btnPivot") == L"P");
+	TEST_ASSERT(shortcuts.acceleratorByName.at("btnVertexEdit") == L"Q");
+	TEST_ASSERT(shortcuts.acceleratorByName.at("btnXMirror") == L"X");
+	TEST_ASSERT(shortcuts.acceleratorByName.at("sliderConform") == L"Ctrl+C");
 
-} // namespace
-
-TEST(CollectsAcceleratorsFromTheWholeMenuBar) {
-	HMENU bar = BuildFakeMenuBar();
-	std::map<UINT, std::wstring> accel = CollectMenuAccelerators(bar);
-
-	TEST_ASSERT(accel[4321] == L"F");
-	TEST_ASSERT(accel[4322] == L"P");
-
-	// Item sem acelerador nao entra no mapa: entrar com string vazia faria a
+	// Item de menu sem acelerador nao entra: entrar com string vazia faria a
 	// reescrita achar que ha atalho e produzir "()".
-	TEST_ASSERT(accel.find(4323) == accel.end());
+	TEST_ASSERT(shortcuts.acceleratorByName.find("btnMerge") ==
+				shortcuts.acceleratorByName.end());
 
-	// Item dentro de submenu tambem e alcancado -- os brushes do Outfit Studio
-	// moram um nivel abaixo, em "Current Tool".
-	TEST_ASSERT(accel.find(4324) == accel.end()); // esse nao tem acelerador
-	TEST_ASSERT(accel.size() == 2);
-
-	// Separador nao pode virar entrada de id 0.
-	TEST_ASSERT(accel.find(0) == accel.end());
-
-	DestroyMenu(bar);
-	TEST_ASSERT(CollectMenuAccelerators(nullptr).empty());
+	// E a cobertura real tem que ser substancial. Se um dia isto cair para
+	// zero, alguma coisa mudou no XRC e a feature morreu em silencio -- que e
+	// exatamente como ela falhou da primeira vez.
+	int matched = 0;
+	for (const auto& tool : shortcuts.toolByTooltip) {
+		if (tool.second.empty())
+			continue;
+		if (shortcuts.acceleratorByName.count(tool.second))
+			++matched;
+	}
+	TEST_ASSERT(matched >= 10);
 	return true;
 }
 
-namespace {
+TEST(ToolTooltipsSurviveTheXrcQuirks) {
+	const wchar_t* xrc = L"tests\\data\\OutfitStudio.xrc";
+	if (GetFileAttributesW(xrc) == INVALID_FILE_ATTRIBUTES)
+		return true;
 
-HWND MakeFrameWithToolbar(HWND& outToolbar) {
-	static bool registered = false;
-	if (!registered) {
-		WNDCLASSW wc = {};
-		wc.lpfnWndProc = DefWindowProcW;
-		wc.hInstance = GetModuleHandleW(nullptr);
-		wc.lpszClassName = L"BSOSTooltipHost";
-		RegisterClassW(&wc);
-		registered = true;
-	}
+	const XrcShortcuts shortcuts = ResolveXrcShortcuts(xrc);
 
-	INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_BAR_CLASSES};
-	InitCommonControlsEx(&icc);
+	// O "\n" do XRC e literal -- barra e ene -- e o wx o converte em quebra de
+	// linha ao carregar. Sem converter tambem aqui, os tooltips de duas linhas
+	// nunca casariam com o que aparece na tela.
+	auto mask = shortcuts.toolByTooltip.find(
+		L"Mask vertices to prevent them from being transformed.\n"
+		L"Hold down the ALT key to remove masking.");
+	TEST_ASSERT(mask != shortcuts.toolByTooltip.end());
+	TEST_ASSERT(mask->second == "btnMaskBrush");
 
-	HWND frame = CreateWindowExW(0, L"BSOSTooltipHost", L"frame", WS_OVERLAPPEDWINDOW,
-								 0, 0, 400, 300, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-	if (!frame)
-		return nullptr;
-
-	SetMenu(frame, BuildFakeMenuBar());
-
-	outToolbar = CreateWindowExW(0, TOOLBARCLASSNAMEW, nullptr,
-								 WS_CHILD | WS_VISIBLE | TBSTYLE_TOOLTIPS,
-								 0, 0, 400, 30, frame, nullptr, GetModuleHandleW(nullptr), nullptr);
-	if (!outToolbar)
-		return frame;
-
-	SendMessageW(outToolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-
-	TBBUTTON buttons[2] = {};
-	buttons[0].idCommand = 4321; // tem acelerador no menu
-	buttons[0].fsState = TBSTATE_ENABLED;
-	buttons[0].fsStyle = BTNS_BUTTON;
-	buttons[1].idCommand = 4323; // nao tem
-	buttons[1].fsState = TBSTATE_ENABLED;
-	buttons[1].fsStyle = BTNS_BUTTON;
-	SendMessageW(outToolbar, TB_ADDBUTTONS, 2, reinterpret_cast<LPARAM>(buttons));
-
-	return frame;
-}
-
-// Simula o que o controle de tooltip manda quando o mouse para numa
-// ferramenta, com o texto que o wx ja teria preenchido.
-std::wstring AskTooltip(HWND target, UINT commandId, const wchar_t* wxText, UINT extraFlags = 0) {
-	NMTTDISPINFOW info = {};
-	info.hdr.hwndFrom = target;
-	info.hdr.idFrom = commandId;
-	info.hdr.code = TTN_GETDISPINFOW;
-	info.uFlags = extraFlags;
-	info.lpszText = const_cast<wchar_t*>(wxText);
-
-	SendMessageW(target, WM_NOTIFY, static_cast<WPARAM>(commandId),
-				 reinterpret_cast<LPARAM>(&info));
-
-	if (!info.lpszText)
-		return std::wstring(info.szText);
-	return std::wstring(info.lpszText);
-}
-
-} // namespace
-
-TEST(RewritesToolbarTooltipWithTheShortcut) {
-	HWND toolbar = nullptr;
-	HWND frame = MakeFrameWithToolbar(toolbar);
-	TEST_ASSERT(frame != nullptr);
-	TEST_ASSERT(toolbar != nullptr);
-
-	TEST_ASSERT(ShortcutTooltips::Install(frame));
-
-	// A ferramenta cujo comando tem acelerador no menu ganha o atalho, lido do
-	// proprio menu -- e nada aqui precisou saber que 4321 e o Transform.
-	TEST_ASSERT(AskTooltip(toolbar, 4321, L"Shows a transform tool.") ==
-				L"Shows a transform tool. (F)");
-
-	// A que nao tem acelerador passa intacta.
-	TEST_ASSERT(AskTooltip(toolbar, 4323, L"Merges two vertices.") == L"Merges two vertices.");
-
-	// Id desconhecido tambem passa intacto.
-	TEST_ASSERT(AskTooltip(toolbar, 9999, L"Outra coisa.") == L"Outra coisa.");
-
-	// Com TTF_IDISHWND o idFrom e um handle e nao um comando; casar assim
-	// mesmo acertaria a ferramenta errada por coincidencia numerica.
-	TEST_ASSERT(AskTooltip(toolbar, 4321, L"Transform.", TTF_IDISHWND) == L"Transform.");
-
-	// Passar duas vezes -- barra e pai, que e o que acontece de verdade --
-	// nao pode duplicar o sufixo.
-	std::wstring twice = AskTooltip(toolbar, 4321, L"Transform. (F)");
-	TEST_ASSERT(twice == L"Transform. (F)");
-
-	ShortcutTooltips::Uninstall();
-
-	// Depois de desinstalar, a notificacao volta a passar sem ser tocada.
-	TEST_ASSERT(AskTooltip(toolbar, 4321, L"Transform.") == L"Transform.");
-
-	DestroyWindow(frame);
+	// Arquivo ausente devolve mapa vazio em vez de explodir.
+	TEST_ASSERT(ResolveXrcShortcuts(L"nao_existe.xrc").toolByTooltip.empty());
+	TEST_ASSERT(ResolveXrcShortcuts(nullptr).toolByTooltip.empty());
 	return true;
 }

@@ -103,6 +103,16 @@ struct Config {
 	MirrorPoseSigns mirrorSigns;
 
 	bool logFile = false;
+
+	// [Debug] DumpWindows: despeja a arvore de janelas, as barras e os ids de
+	// menu no log, e liga Ctrl+Shift+D para despejar a janela em primeiro
+	// plano -- que e como se enxerga dentro de um dialogo modal.
+	//
+	// Existe porque adivinhar a estrutura da interface saiu caro: features
+	// inteiras foram construidas sobre suposicoes de classe de controle e de
+	// id de comando que nao eram verdade, e o custo so apareceu na mao do
+	// usuario.
+	bool dumpWindows = false;
 };
 
 // Le uma secao de linhas "xrcName=tecla". Entradas com hotkey invalida sao
