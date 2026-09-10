@@ -31,6 +31,24 @@ HWND g_scroll = nullptr;
 HWND g_edit = nullptr;
 bool g_dark = false;
 UINT g_deferredLayout = 0;
+
+// A auditoria do encolhimento, medida duas vezes.
+//
+// Encolher o painel e uma coisa; o wx deixar encolhido e outra. O wx tem a
+// propria ideia do tamanho de cada painel -- o sizer e o best size dele -- e
+// esconder um controle por ShowWindow, que e o que o filtro faz, nao e o mesmo
+// que dizer ao wx que aquele controle saiu do layout. Entao e inteiramente
+// possivel que o SetWindowPos funcione e o wx o desfaca na proxima passagem de
+// layout, e nenhuma medida tirada na hora saberia disso.
+//
+// Por isso duas: uma logo depois de mexer, outra por mensagem adiada, ja com a
+// fila do wx escoada. Se a primeira der o tamanho pedido e a segunda der o
+// antigo, quem desfaz e o wx, e a correcao tem que vir DEPOIS do layout dele em
+// vez de tentar preve-lo.
+UINT g_deferredAudit = 0;
+HWND g_auditHost = nullptr;
+HWND g_auditWrapper = nullptr;
+int g_auditWanted = 0;
 RECT g_appliedScrollRect = {};
 std::vector<AsymRow> g_rows;
 
@@ -254,6 +272,16 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	const int wanted = paneTop + paneHeight;
 	const int current = wrapperRect.bottom - wrapperRect.top;
 	const int delta = wanted - current;
+
+	// Os numeros do encolhimento, uma vez por filtro e por painel.
+	//
+	// O log ja provou que a rolagem passou a ser recalculada, e mesmo assim o
+	// conteudo media quase dois mil pixels com dezoito linhas a mostra. Ou seja:
+	// o painel nao esta encolhendo, e so estes quatro numeros dizem em qual
+	// conta isso se perde.
+	LogF("symmetrize: encolher painel %p -- ultima linha em %d, topo do painel %d, quer %d, tem %d",
+		 static_cast<void*>(wrapper), lastBottom, paneTop, wanted, current);
+
 	if (delta == 0)
 		return;
 
@@ -263,6 +291,23 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 				 paneHeight, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	SetWindowPos(wrapper, nullptr, 0, 0, wrapperRect.right - wrapperRect.left, wanted,
 				 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// O que o Windows diz AGORA, antes de o wx ter chance de opinar.
+	RECT afterHost = {};
+	RECT afterWrapper = {};
+	GetWindowRect(host, &afterHost);
+	GetWindowRect(wrapper, &afterWrapper);
+	LogF("symmetrize: imediato -- painel %ld, envelope %ld (pedi %d)",
+		 afterHost.bottom - afterHost.top, afterWrapper.bottom - afterWrapper.top, wanted);
+
+	// E o que ele vai dizer depois que o wx terminar o que tiver para fazer.
+	g_auditHost = host;
+	g_auditWrapper = wrapper;
+	g_auditWanted = wanted;
+	if (!g_deferredAudit)
+		g_deferredAudit = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeAudit");
+	if (g_deferredAudit && g_dialog)
+		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
 
 	// E tudo que estava abaixo dele sobe ou desce junto.
 	for (HWND sibling : ChildrenOf(g_scroll)) {
@@ -510,9 +555,45 @@ LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	return result;
 }
 
+// Mede de novo, com a fila do wx ja escoada, e lista o conteudo da area que
+// rola.
+//
+// A lista dos filhos diretos existe porque a faixa de rolagem e calculada a
+// partir deles. Se algum deles continuar terminando la embaixo depois do
+// filtro, e ele que esta segurando o vazio -- e nao ha conta em
+// ShrinkHostToFit que resolva isso, porque o painel que ela encolhe nem e esse.
+void AuditScrollContent() {
+	if (!g_auditHost || !IsWindow(g_auditHost) || !g_auditWrapper || !IsWindow(g_auditWrapper))
+		return;
+
+	RECT hostRect = {};
+	RECT wrapperRect = {};
+	GetWindowRect(g_auditHost, &hostRect);
+	GetWindowRect(g_auditWrapper, &wrapperRect);
+	LogF("symmetrize: adiado -- painel %ld, envelope %ld (pedi %d)",
+		 hostRect.bottom - hostRect.top, wrapperRect.bottom - wrapperRect.top, g_auditWanted);
+
+	if (!g_scroll || !IsWindow(g_scroll))
+		return;
+
+	for (HWND child : ChildrenOf(g_scroll)) {
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
+		LogF("symmetrize:   filho %p [%ls] de %ld a %ld, visivel=%d%s",
+			 static_cast<void*>(child), ClassOf(child).c_str(), rc.top, rc.bottom,
+			 HasVisibleStyle(child) ? 1 : 0, child == g_auditWrapper ? " <- o envelope" : "");
+	}
+}
+
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	if (g_deferredLayout && msg == g_deferredLayout) {
 		ApplyLayout();
+		return 0;
+	}
+
+	if (g_deferredAudit && msg == g_deferredAudit) {
+		AuditScrollContent();
 		return 0;
 	}
 

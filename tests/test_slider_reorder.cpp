@@ -3,6 +3,8 @@
 
 #include "features/slider_reorder.h"
 
+#include <algorithm>
+
 TEST(FindsTheSlotUnderThePointer) {
 	// Lugares de 25 em 25, como as linhas do painel de sliders.
 	const std::vector<int> slots = {0, 25, 50, 75, 100};
@@ -99,5 +101,60 @@ TEST(MovingARowPushesTheOthersInsteadOfSwapping) {
 	std::vector<HWND> empty;
 	MoveInOrder(empty, 0, 0);
 	TEST_ASSERT(empty.empty());
+	return true;
+}
+
+namespace {
+
+std::vector<int> Order(std::initializer_list<const wchar_t*> desired,
+					   std::initializer_list<const wchar_t*> present) {
+	return ApplyDesiredOrder(std::vector<std::wstring>(desired.begin(), desired.end()),
+							 std::vector<std::wstring>(present.begin(), present.end()));
+}
+
+bool Same(const std::vector<int>& got, std::initializer_list<int> expected) {
+	return got.size() == expected.size() && std::equal(got.begin(), got.end(), expected.begin());
+}
+
+} // namespace
+
+TEST(TheChosenOrderSurvivesTheListBeingRebuilt) {
+	// O usuario deixou Weight antes de Belly. O programa refaz a lista e devolve
+	// tudo na ordem original: a escolha tem que valer de novo.
+	TEST_ASSERT(Same(Order({L"Weight", L"Belly", L"Chubby"}, {L"Belly", L"Chubby", L"Weight"}),
+					 {2, 0, 1}));
+
+	// Sem escolha nenhuma, a ordem do programa fica como esta.
+	TEST_ASSERT(Same(Order({}, {L"Belly", L"Chubby"}), {0, 1}));
+	return true;
+}
+
+TEST(SlidersOutsideTheChosenOrderGoToTheEndInsteadOfDisappearing) {
+	// Trocar de outfit traz sliders que o usuario nunca ordenou. Eles vao para o
+	// fim, na ordem em que o programa os deu -- descarta-los sumiria com slider
+	// da tela, que e a unica falha realmente grave que esta funcao pode ter.
+	TEST_ASSERT(Same(Order({L"Weight", L"Belly"}, {L"Belly", L"Nova", L"Weight", L"Outra"}),
+					 {2, 0, 1, 3}));
+
+	// Nome que o usuario ordenou e que este outfit nao tem simplesmente nao
+	// entra, e nao desloca ninguem.
+	TEST_ASSERT(Same(Order({L"Sumiu", L"Weight", L"Foi"}, {L"Belly", L"Weight"}), {1, 0}));
+
+	// Todo mundo novo: nada a reordenar.
+	TEST_ASSERT(Same(Order({L"Weight"}, {L"A", L"B"}), {0, 1}));
+	return true;
+}
+
+TEST(ARepeatedNameConsumesOneSliderAtATime) {
+	// Dois sliders com o mesmo nome nao podem virar o mesmo indice duas vezes:
+	// o resultado deixaria de ser uma permutacao e uma das linhas ficaria em
+	// cima da outra.
+	const std::vector<int> got = Order({L"Igual", L"Igual", L"Fim"}, {L"Fim", L"Igual", L"Igual"});
+	TEST_ASSERT(Same(got, {1, 2, 0}));
+
+	// Toda saida e uma permutacao completa da entrada, sempre.
+	std::vector<int> sorted = got;
+	std::sort(sorted.begin(), sorted.end());
+	TEST_ASSERT(Same(sorted, {0, 1, 2}));
 	return true;
 }

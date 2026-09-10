@@ -2,19 +2,29 @@
 
 #include <windows.h>
 
+#include <string>
 #include <vector>
 
-// Reordenar sliders arrastando.
+// Reordenar sliders arrastando pela alca.
 //
 // Cada linha do painel de sliders e um painel proprio -- lapis, caixa de
 // marcacao, nome, barra e porcentagem dentro dele -- e foi isso que tornou a
 // feature possivel: arrastar uma linha e mover UMA janela, nao remontar um
 // layout.
 //
-// O arrasto comeca quando o clique cai no FUNDO da linha, e nao num controle
-// dela. Clicar no lapis continua entrando em edit mode, na caixa continua
-// marcando, na barra continua puxando o valor; so o espaco vazio e o nome
-// pegam a linha. Assim nada do que ja funcionava e roubado.
+// A alca e um controle de VERDADE, e nao um enfeite por cima da linha. Ela
+// captura o mouse no aperto e so o solta no fim, entao o arrasto nao depende
+// de o clique atravessar um controle nem de o hook global adivinhar em que
+// janela ele caiu. A primeira versao dependia das duas coisas; funcionava, mas
+// por acidente de hit-test.
+//
+// A ordem vive por NOME de slider, e nao por HWND.
+//
+// Isso importa porque o wx refaz o layout quando quer -- trocar de outfit,
+// redimensionar o painel, filtrar a lista -- e as janelas de ontem nao existem
+// mais. Guardar a ordem em coordenadas ou em handles significa perde-la no
+// primeiro relayout, que e exatamente o modo como a busca do Symmetrize falhou
+// tres vezes antes de aprender a mesma licao.
 //
 // Por enquanto a ordem e so visual: ela vive na tela e no mod, e o arquivo do
 // projeto nao e tocado. Escrever no disco sem o usuario mandar salvar seria
@@ -24,7 +34,8 @@ namespace SliderReorder {
 bool Install(HWND frame);
 void Uninstall();
 
-// Verdadeiro se a mensagem foi consumida pelo arrasto e nao deve seguir.
+// Verdadeiro se a mensagem foi consumida. So o Esc, que cancela um arrasto em
+// curso -- o resto do gesto pertence a alca, que capturou o mouse.
 bool HandleMouseMessage(MSG* msg);
 
 } // namespace SliderReorder
@@ -44,3 +55,13 @@ int SlotAt(const std::vector<int>& slotTops, int y);
 // jogaria a ultima para o topo, e o que o usuario espera e que as do meio
 // subam um lugar cada.
 void MoveInOrder(std::vector<HWND>& order, int from, int to);
+
+// A ordem em que as linhas devem aparecer, dada a ordem desejada por nome e os
+// nomes que a lista tem AGORA.
+//
+// O que o usuario escolheu sobrevive a lista ser refeita: os nomes que ele
+// ordenou vem primeiro, na ordem dele, e os que apareceram depois -- outro
+// outfit, outro projeto -- vao para o fim, na ordem em que o programa os deu.
+// Nome que sumiu simplesmente nao entra.
+std::vector<int> ApplyDesiredOrder(const std::vector<std::wstring>& desired,
+								   const std::vector<std::wstring>& present);

@@ -13,499 +13,707 @@
 
 namespace {
 
+// A alca fica ENTRE a caixa de marcacao e o nome, e nao antes do lapis.
+//
+// A medida saiu da propria linha, registrada no log: lapis em 0..22, caixa em
+// 27..42, nome em 47..149, barra em 154..715, valor em 722..762. Nao ha um pixel
+// livre ali, entao alguem tem que andar. Poe-la a esquerda obrigaria a empurrar
+// o lapis e a caixa junto; entre a caixa e o nome so o nome e a barra andam, e
+// os dois botoes que ja existiam ficam exatamente onde o usuario aprendeu a
+// procura-los.
+const int kGripWidth = 16;
+const int kGripId = 0xBF03;
+const UINT_PTR kGripSubclassId = 0xB515;
+const UINT_PTR kHostSubclassId = 0xB516;
+const UINT_PTR kSlotSubclassId = 0xB517;
+
+// Pedido de "olhe a lista de novo", mandado pelo painel para ele mesmo.
+const UINT kRecheckMsg = WM_APP + 0x1F;
+
 HWND g_frame = nullptr;
 HWND g_posePanel = nullptr;
 bool g_installed = false;
 
-// A ordem em que as linhas estao AGORA na tela, e os lugares que elas ocupam.
+// Uma linha da lista, com o nome que a identifica.
+struct Row {
+	HWND window = nullptr;
+	std::wstring name;
+	int top = 0;
+};
+
+// A ordem que o usuario escolheu, por NOME.
 //
-// Os lugares sao lidos no inicio de cada arrasto, e nao guardados da
-// instalacao: a lista e refeita a cada troca de outfit, e um lugar guardado de
-// antes apontaria para uma linha que ja nao existe.
-std::vector<HWND> g_order;
-std::vector<int> g_slotTops;
-std::vector<HWND> g_originalOrder;
+// Nao por HWND e nao por coordenada: o wx refaz o layout quando quer, e as
+// janelas de ontem nao existem mais depois de trocar de outfit. O nome e a unica
+// coisa do slider que sobrevive a isso.
+std::vector<std::wstring> g_desiredOrder;
 
-bool g_dragging = false;
-int g_dragIndex = -1;
-int g_grabOffset = 0; // do topo da linha ate onde o usuario a pegou
-HWND g_host = nullptr;
+// As linhas que a lista tinha da ultima vez que olhamos.
+//
+// Guardadas inteiras, e nao so a contagem: um outfit de cento e vinte sliders
+// trocado por outro de cento e vinte recria todas as janelas sem mudar o numero,
+// e contar nao perceberia.
+std::vector<HWND> g_knownRows;
+HWND g_knownHost = nullptr;
+DWORD g_lastCheck = 0;
+bool g_recheckPending = false;
 
-int TopOf(HWND window, HWND parent) {
+bool g_gripsOn = true;
+
+// O arrasto em curso.
+struct Drag {
+	bool active = false;
+	HWND host = nullptr;
+	HWND slot = nullptr;        // o vao desenhado no lugar de destino
+	std::vector<HWND> order;    // as linhas na ordem de agora
+	std::vector<HWND> original; // como estavam quando o arrasto comecou
+	std::vector<int> slotTops;
+	int rowHeight = 0;
+	int index = -1;
+	int grabOffset = 0;
+};
+
+Drag g_drag;
+
+RECT RectIn(HWND window, HWND parent) {
 	RECT rc = {};
 	GetWindowRect(window, &rc);
 	MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&rc), 2);
-	return static_cast<int>(rc.top);
+	return rc;
 }
 
-// As linhas do painel: filhos diretos que tem uma barra dentro.
+HWND GripOf(HWND row) {
+	return GetDlgItem(row, kGripId);
+}
+
+std::wstring TextOf(HWND window) {
+	const int len = GetWindowTextLengthW(window);
+	if (len <= 0 || len > 512)
+		return std::wstring();
+	std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+	const int written = GetWindowTextW(window, text.data(), static_cast<int>(text.size()));
+	text.resize(written > 0 ? static_cast<size_t>(written) : 0);
+	return text;
+}
+
+bool HasTrackbar(HWND window) {
+	return !FindDescendantsByClass(window, TRACKBAR_CLASSW).empty();
+}
+
+// Onde estao a barra e o nome dentro da linha.
 //
-// "Tem uma barra dentro" e o que distingue linha de slider de qualquer outra
-// coisa que o painel carregue -- cabecalho de categoria, rodape, separador.
-std::vector<HWND> FindRows(HWND host) {
-	std::vector<HWND> rows;
-	for (HWND child : ChildrenOf(host)) {
-		if (!FindDescendantsByClass(child, TRACKBAR_CLASSW).empty())
-			rows.push_back(child);
+// O nome e o controle mais a DIREITA entre os que ficam a esquerda da barra --
+// ou seja, depois do lapis e da caixa de marcacao. E ali que a alca entra, e e
+// dali para a direita que tudo anda.
+struct RowParts {
+	HWND trackbar = nullptr;
+	HWND name = nullptr;
+	RECT trackbarRect = {};
+	RECT nameRect = {};
+	bool ok = false;
+};
+
+RowParts FindParts(HWND row) {
+	RowParts parts;
+	HWND grip = GripOf(row);
+
+	for (HWND child : ChildrenOf(row)) {
+		if (child == grip)
+			continue;
+		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) != 0)
+			continue;
+		parts.trackbar = child;
+		parts.trackbarRect = RectIn(child, row);
+	}
+	if (!parts.trackbar)
+		return parts; // sem barra nao e linha de slider
+
+	for (HWND child : ChildrenOf(row)) {
+		if (child == grip || child == parts.trackbar)
+			continue;
+		const RECT rc = RectIn(child, row);
+		if (rc.left >= parts.trackbarRect.left)
+			continue; // a porcentagem, que fica a direita da barra
+		if (!parts.name || rc.left > parts.nameRect.left) {
+			parts.name = child;
+			parts.nameRect = rc;
+		}
 	}
 
-	std::sort(rows.begin(), rows.end(), [host](HWND a, HWND b) {
-		return TopOf(a, host) < TopOf(b, host);
-	});
+	parts.ok = parts.name != nullptr;
+	return parts;
+}
+
+std::wstring NameOf(HWND row) {
+	const RowParts parts = FindParts(row);
+	return parts.ok ? TextOf(parts.name) : std::wstring();
+}
+
+// Os filhos diretos do painel que sao linha de slider, na ordem da z-order.
+//
+// Serve para RESPONDER "a lista mudou?": o que importa ai e o conjunto de
+// janelas, nao onde elas estao.
+std::vector<HWND> RowWindows(HWND host) {
+	std::vector<HWND> out;
+	for (HWND child : ChildrenOf(host)) {
+		if (HasTrackbar(child))
+			out.push_back(child);
+	}
+	return out;
+}
+
+// As linhas de cima para baixo, com nome e altura.
+//
+// Ordenadas pela posicao na TELA e nao pela z-order: a z-order nao promete
+// acompanhar a ordem em que as linhas aparecem, e e a da tela que o usuario esta
+// arrastando. Depois do primeiro arrasto as duas ja divergem, porque a linha
+// carregada vai para o topo da z-order.
+std::vector<Row> FindRows(HWND host) {
+	std::vector<Row> rows;
+	for (HWND window : RowWindows(host)) {
+		Row row;
+		row.window = window;
+		row.name = NameOf(window);
+		row.top = static_cast<int>(RectIn(window, host).top);
+		rows.push_back(row);
+	}
+
+	std::sort(rows.begin(), rows.end(),
+			  [](const Row& a, const Row& b) { return a.top < b.top; });
 	return rows;
 }
 
-// Quanto os controles do programa andam para a direita para abrir espaco.
-//
-// A medida veio da propria linha, registrada no log: 766x25, com o lapis em
-// 0..22, a caixa em 27..42, o nome em 47..149, a barra em 154..715 e o valor em
-// 722..762. Nao havia UM pixel livre -- o maior vao eram cinco pixels entre o
-// lapis e a caixa -- entao a alca so cabe empurrando.
-const int kHandleShift = 20;
-const int kHandleId = 0xBF03;
-
-bool g_handlesOn = true;
-UINT g_handleMenuId = 0;
-
-// O painel e quantos filhos ele tinha da ultima vez.
-//
-// A contagem, e nao uma linha de referencia: o log mostrou que a lista e
-// POPULADA aos poucos -- as alcas foram para cem linhas e trinta segundos
-// depois havia cento e trinta. Uma referencia na primeira linha continuava
-// valida e as trinta novas ficavam sem alca para sempre. A contagem muda
-// quando a lista cresce, encolhe ou e refeita.
-HWND g_handleHost = nullptr;
-size_t g_handleChildCount = 0;
-DWORD g_lastHandleCheck = 0;
-
-HWND HandleOf(HWND row) {
-	return GetDlgItem(row, kHandleId);
+std::vector<HWND> WindowsOf(const std::vector<Row>& rows) {
+	std::vector<HWND> out;
+	out.reserve(rows.size());
+	for (const Row& row : rows)
+		out.push_back(row.window);
+	return out;
 }
 
-const UINT_PTR kHandleSubclassId = 0xB515;
+void BeginDrag(HWND row);
+void DragToCursor();
+void FinishDrag(bool cancelled);
+void RefreshRows();
 
-// Desenha os tres tracos da alca.
+// Desenha os seis pontos da alca.
 //
 // Desenhados, e nao um caractere numa fonte. A versao anterior punha o simbolo
-// "identico a" num Static e o diagnostico provou que ela ficava no lugar certo
-// -- (0,0) 20x22, colada no lapis em (20,0) -- e mesmo assim nada aparecia na
-// tela. Um glifo depende da fonte ter o caractere, do tamanho escolhido e de
-// como o controle o alinha; tres retangulos nao dependem de nada disso.
+// "identico a" num Static, e o diagnostico provou que ele ficava na posicao
+// certa e mesmo assim nada aparecia: um glifo depende de a fonte te-lo, do corpo
+// dela e de como o controle o alinha. Seis retangulos nao dependem de nada
+// disso.
 //
-// A cor sai do PAI, perguntando a ele por WM_CTLCOLORSTATIC, que e como um
-// Static normal se pinta. Assim o traco acompanha o tema claro ou escuro sem
-// nenhuma cor escrita aqui.
-LRESULT CALLBACK HandleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
-	if (msg == WM_NCDESTROY)
-		RemoveWindowSubclass(hwnd, HandleSubclassProc, id);
-
-	if (msg != WM_PAINT)
-		return DefSubclassProc(hwnd, msg, wParam, lParam);
-
-	PAINTSTRUCT paint = {};
-	HDC dc = BeginPaint(hwnd, &paint);
-	if (!dc)
-		return 0;
-
+// A cor sai do PAI, perguntada por WM_CTLCOLORSTATIC, que e como um Static comum
+// se pinta. Assim a alca acompanha o tema claro ou escuro sozinha.
+void PaintGrip(HWND grip, HDC dc) {
 	RECT rc = {};
-	GetClientRect(hwnd, &rc);
+	GetClientRect(grip, &rc);
 
 	HBRUSH background = reinterpret_cast<HBRUSH>(
-		SendMessageW(GetParent(hwnd), WM_CTLCOLORSTATIC,
-					 reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(hwnd)));
+		SendMessageW(GetParent(grip), WM_CTLCOLORSTATIC, reinterpret_cast<WPARAM>(dc),
+					 reinterpret_cast<LPARAM>(grip)));
 	if (background)
 		FillRect(dc, &rc, background);
 
 	HBRUSH ink = CreateSolidBrush(GetTextColor(dc));
-	if (ink) {
-		const int width = static_cast<int>(rc.right - rc.left);
-		const int height = static_cast<int>(rc.bottom - rc.top);
+	if (!ink)
+		return;
 
-		const int barWidth = width - 8;
-		const int barHeight = 2;
-		const int gap = 4;
-		const int totalHeight = barHeight * 3 + gap * 2;
-		const int firstTop = (height - totalHeight) / 2;
+	const int dot = 2;
+	const int gapX = 3;
+	const int gapY = 3;
+	const int width = dot * 2 + gapX;
+	const int height = dot * 3 + gapY * 2;
+	const int originX = (static_cast<int>(rc.right) - width) / 2;
+	const int originY = (static_cast<int>(rc.bottom) - height) / 2;
 
-		for (int i = 0; i < 3 && barWidth > 0; ++i) {
-			RECT bar = {};
-			bar.left = rc.left + 4;
-			bar.right = bar.left + barWidth;
-			bar.top = rc.top + firstTop + i * (barHeight + gap);
-			bar.bottom = bar.top + barHeight;
-			FillRect(dc, &bar, ink);
+	for (int line = 0; line < 3; ++line) {
+		for (int column = 0; column < 2; ++column) {
+			RECT bit = {};
+			bit.left = originX + column * (dot + gapX);
+			bit.top = originY + line * (dot + gapY);
+			bit.right = bit.left + dot;
+			bit.bottom = bit.top + dot;
+			FillRect(dc, &bit, ink);
 		}
-		DeleteObject(ink);
 	}
-
-	EndPaint(hwnd, &paint);
-	return 0;
+	DeleteObject(ink);
 }
 
-// Poe a alca numa linha e empurra o resto para a direita.
+// A alca e dona do gesto.
 //
-// Quem tem a barra encolhe em vez de andar: se ela tambem andasse, o campo de
-// valor sairia pela borda da linha.
-void AddHandle(HWND row) {
-	if (HandleOf(row))
-		return; // ja tem
+// Ela captura o mouse no aperto, entao o movimento e o soltar chegam AQUI mesmo
+// que o ponteiro saia da linha, do painel ou da janela. A versao anterior
+// dependia de o clique atravessar um controle por hit-test e de o hook global
+// adivinhar em que janela ele tinha caido; e como o alvo real da mensagem era a
+// alca e nao a linha, a linha nunca era encontrada.
+LRESULT CALLBACK GripProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	switch (msg) {
+		case WM_NCDESTROY:
+			RemoveWindowSubclass(hwnd, GripProc, id);
+			break;
 
-	const std::vector<HWND> children = ChildrenOf(row);
-	if (children.empty())
-		return;
+		case WM_ERASEBKGND:
+			return 1; // o fundo sai no WM_PAINT, junto com os pontos
 
-	int trackbarLeft = 0;
-	bool haveTrackbar = false;
-	for (HWND child : children) {
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) != 0)
-			continue;
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
-		trackbarLeft = static_cast<int>(rc.left);
-		haveTrackbar = true;
-	}
-	if (!haveTrackbar)
-		return; // sem barra nao e linha de slider
-
-	for (HWND child : children) {
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
-
-		const int width = static_cast<int>(rc.right - rc.left);
-		const int height = static_cast<int>(rc.bottom - rc.top);
-
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0) {
-			SetWindowPos(child, nullptr, static_cast<int>(rc.left) + kHandleShift,
-						 static_cast<int>(rc.top), width - kHandleShift, height,
-						 SWP_NOZORDER | SWP_NOACTIVATE);
-		} else if (static_cast<int>(rc.left) < trackbarLeft) {
-			SetWindowPos(child, nullptr, static_cast<int>(rc.left) + kHandleShift,
-						 static_cast<int>(rc.top), 0, 0,
-						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		case WM_PAINT: {
+			PAINTSTRUCT paint = {};
+			if (HDC dc = BeginPaint(hwnd, &paint))
+				PaintGrip(hwnd, dc);
+			EndPaint(hwnd, &paint);
+			return 0;
 		}
-		// A direita da barra fica onde esta: o valor nao pode sair da linha.
+
+		case WM_SETCURSOR:
+			SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+			return TRUE;
+
+		case WM_LBUTTONDOWN:
+			SetCapture(hwnd);
+			BeginDrag(GetParent(hwnd));
+			return 0;
+
+		case WM_MOUSEMOVE:
+			if (g_drag.active)
+				DragToCursor();
+			return 0;
+
+		case WM_LBUTTONUP:
+			if (g_drag.active) {
+				FinishDrag(false);
+				ReleaseCapture();
+			}
+			return 0;
+
+		// Perder a captura -- alt-tab, outra janela roubando -- encerra o
+		// arrasto onde ele estiver. Sem isto o estado ficaria aberto e a lista
+		// seguiria um mouse que ja nao esta arrastando nada.
+		case WM_CAPTURECHANGED:
+			if (g_drag.active)
+				FinishDrag(false);
+			return 0;
+
+		default:
+			break;
 	}
-
-	// Do tamanho e na altura do botao de edit mode, e nao de um tamanho
-	// inventado: a alca fica ao LADO dele, e dois botoes vizinhos de alturas
-	// diferentes leem como defeito.
-	//
-	// A medida sai do proprio lapis, que e o controle mais a esquerda da linha,
-	// entao ela acompanha se o programa mudar de tamanho ou o usuario mexer no
-	// DPI.
-	RECT pencil = {};
-	bool havePencil = false;
-	for (HWND child : children) {
-		if (child == HandleOf(row))
-			continue;
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
-		if (!havePencil || rc.left < pencil.left) {
-			pencil = rc;
-			havePencil = true;
-		}
-	}
-
-	RECT rowRect = {};
-	GetClientRect(row, &rowRect);
-
-	const int size = havePencil ? static_cast<int>(pencil.bottom - pencil.top) : 20;
-	const int top = havePencil ? static_cast<int>(pencil.top)
-							   : (static_cast<int>(rowRect.bottom) - size) / 2;
-
-	// Static, e nao Button, de proposito: Static sem SS_NOTIFY devolve o clique
-	// ao pai, entao a alca pega o arrasto pelo mesmo caminho que o fundo da
-	// linha ja usa. Um botao consumiria o clique e nao arrastaria nada.
-	// O simbolo vai por escape, e nao como caractere no proprio arquivo: sem
-	// /utf-8 o compilador le os bytes do fonte na codificacao do sistema, e os
-	// tres bytes do "identico a" viram tres letras acentuadas. Foi exatamente
-	// isso que apareceu na tela no lugar da alca: "ali" com acentos.
-	// Encaixa exatamente no vao que o empurrao abriu, colada no lapis.
-	const int left = havePencil ? static_cast<int>(pencil.left) - kHandleShift : 0;
-
-	HWND handle = CreateWindowExW(0, L"STATIC", L"\u2261",
-								  WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-								  left > 0 ? left : 0, top > 0 ? top : 0,
-								  kHandleShift, size, row,
-								  reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kHandleId)),
-								  reinterpret_cast<HINSTANCE>(
-									  GetWindowLongPtrW(row, GWLP_HINSTANCE)),
-								  nullptr);
-	if (!handle)
-		return;
-
-	SetWindowSubclass(handle, HandleSubclassProc, kHandleSubclassId, 0);
-
-	// A posicao da primeira, uma vez por sessao. Sem isto, "nao aparece" e
-	// "aparece no lugar errado" contam a mesma historia no log -- nenhuma.
-	static bool logged = false;
-	if (!logged) {
-		logged = true;
-		RECT placed = {};
-		GetWindowRect(handle, &placed);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&placed), 2);
-		LogF("reorder: alca em (%ld,%ld) %ldx%ld, lapis em (%ld,%ld) %ldx%ld",
-			 placed.left, placed.top, placed.right - placed.left, placed.bottom - placed.top,
-			 pencil.left, pencil.top, pencil.right - pencil.left, pencil.bottom - pencil.top);
-	}
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-// Tira a alca e devolve os controles ao lugar.
-void RemoveHandle(HWND row) {
-	HWND handle = HandleOf(row);
-	if (!handle)
-		return;
+// O vao: uma moldura no lugar para onde a linha vai cair.
+//
+// Sem ele o arrasto e ambiguo. As outras linhas se acomodam e deixam um buraco,
+// mas um buraco no meio de uma lista de barras cinzentas nao se le como "e aqui
+// que ela entra" -- le-se como um erro de desenho. A moldura diz o que o buraco
+// significa.
+LRESULT CALLBACK SlotProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	switch (msg) {
+		case WM_NCDESTROY:
+			RemoveWindowSubclass(hwnd, SlotProc, id);
+			break;
 
-	DestroyWindow(handle);
+		case WM_ERASEBKGND:
+			return 1;
 
-	int trackbarLeft = 0;
-	bool haveTrackbar = false;
-	for (HWND child : ChildrenOf(row)) {
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) != 0)
-			continue;
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
-		trackbarLeft = static_cast<int>(rc.left);
-		haveTrackbar = true;
-	}
-	if (!haveTrackbar)
-		return;
+		case WM_PAINT: {
+			PAINTSTRUCT paint = {};
+			HDC dc = BeginPaint(hwnd, &paint);
+			if (dc) {
+				RECT rc = {};
+				GetClientRect(hwnd, &rc);
 
-	for (HWND child : ChildrenOf(row)) {
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+				HBRUSH background = reinterpret_cast<HBRUSH>(
+					SendMessageW(GetParent(hwnd), WM_CTLCOLORSTATIC,
+								 reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(hwnd)));
+				if (background)
+					FillRect(dc, &rc, background);
 
-		const int width = static_cast<int>(rc.right - rc.left);
-		const int height = static_cast<int>(rc.bottom - rc.top);
-
-		if (_wcsicmp(ClassOf(child).c_str(), TRACKBAR_CLASSW) == 0) {
-			SetWindowPos(child, nullptr, static_cast<int>(rc.left) - kHandleShift,
-						 static_cast<int>(rc.top), width + kHandleShift, height,
-						 SWP_NOZORDER | SWP_NOACTIVATE);
-		} else if (static_cast<int>(rc.left) <= trackbarLeft) {
-			SetWindowPos(child, nullptr, static_cast<int>(rc.left) - kHandleShift,
-						 static_cast<int>(rc.top), 0, 0,
-						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+				if (HBRUSH edge = CreateSolidBrush(GetSysColor(COLOR_HIGHLIGHT))) {
+					FrameRect(dc, &rc, edge);
+					DeleteObject(edge);
+				}
+			}
+			EndPaint(hwnd, &paint);
+			return 0;
 		}
+
+		default:
+			break;
 	}
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-void PlaceRow(HWND row, int top) {
-	RECT rc = {};
-	GetWindowRect(row, &rc);
-	MapWindowPoints(nullptr, g_host, reinterpret_cast<POINT*>(&rc), 2);
+// Poe a linha no formato com alca, quantas vezes for chamada.
+//
+// Idempotente de proposito: o wx refaz o layout da linha por conta propria e
+// devolve o nome e a barra para as posicoes originais, entao esta funcao precisa
+// distinguir "ainda nao mexi" de "ja esta como eu quero". Quem diz e a distancia
+// entre a alca e o nome: se e exatamente a largura da alca, o layout esta feito;
+// se nao e, o wx acabou de desfaze-lo.
+//
+// Uma versao que so somasse a largura a cada chamada empurraria o nome para fora
+// da linha na segunda vez.
+void LayoutRow(HWND row) {
+	HWND grip = GripOf(row);
+	if (!grip)
+		return;
 
+	const RowParts parts = FindParts(row);
+	if (!parts.ok)
+		return;
+
+	const RECT gripRect = RectIn(grip, row);
+	if (parts.nameRect.left - gripRect.left == kGripWidth) {
+		// So mantem a alca alinhada com o nome, caso a altura da linha mude.
+		if (gripRect.top != parts.nameRect.top ||
+			gripRect.bottom - gripRect.top != parts.nameRect.bottom - parts.nameRect.top) {
+			SetWindowPos(grip, nullptr, static_cast<int>(gripRect.left),
+						 static_cast<int>(parts.nameRect.top), kGripWidth,
+						 static_cast<int>(parts.nameRect.bottom - parts.nameRect.top),
+						 SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+		return;
+	}
+
+	// A alca ocupa o lugar onde o nome comecava; o nome e a barra andam para a
+	// direita pela largura dela. So esses dois: o lapis, a caixa e a porcentagem
+	// ficam onde estavam, e por isso a barra encolhe pelo mesmo tanto que anda
+	// -- senao passaria por cima da porcentagem.
+	SetWindowPos(grip, nullptr, static_cast<int>(parts.nameRect.left),
+				 static_cast<int>(parts.nameRect.top), kGripWidth,
+				 static_cast<int>(parts.nameRect.bottom - parts.nameRect.top),
+				 SWP_NOZORDER | SWP_NOACTIVATE);
+
+	SetWindowPos(parts.name, nullptr, static_cast<int>(parts.nameRect.left) + kGripWidth,
+				 static_cast<int>(parts.nameRect.top), 0, 0,
+				 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	SetWindowPos(parts.trackbar, nullptr, static_cast<int>(parts.trackbarRect.left) + kGripWidth,
+				 static_cast<int>(parts.trackbarRect.top),
+				 static_cast<int>(parts.trackbarRect.right - parts.trackbarRect.left) - kGripWidth,
+				 static_cast<int>(parts.trackbarRect.bottom - parts.trackbarRect.top),
+				 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Poe a alca na linha, se ela ainda nao tem uma.
+//
+// A janela e criada ANTES de qualquer controle sair do lugar. Na ordem contraria
+// -- que era a de antes -- uma falha na criacao deixava a linha deslocada e sem
+// alca nenhuma para explicar por que.
+void AddGrip(HWND row) {
+	if (GripOf(row)) {
+		LayoutRow(row);
+		return;
+	}
+
+	const RowParts parts = FindParts(row);
+	if (!parts.ok)
+		return;
+
+	HWND grip = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_NOTIFY,
+								static_cast<int>(parts.nameRect.left),
+								static_cast<int>(parts.nameRect.top), kGripWidth,
+								static_cast<int>(parts.nameRect.bottom - parts.nameRect.top), row,
+								reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kGripId)),
+								reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(row, GWLP_HINSTANCE)),
+								nullptr);
+	if (!grip)
+		return; // a linha continua intacta
+
+	SetWindowSubclass(grip, GripProc, kGripSubclassId, 0);
+	LayoutRow(row);
+}
+
+void RemoveGrip(HWND row) {
+	HWND grip = GripOf(row);
+	if (!grip)
+		return;
+
+	const RowParts parts = FindParts(row);
+	const RECT gripRect = RectIn(grip, row);
+	const bool shifted = parts.ok && parts.nameRect.left - gripRect.left == kGripWidth;
+
+	DestroyWindow(grip);
+	if (!shifted)
+		return;
+
+	SetWindowPos(parts.name, nullptr, static_cast<int>(parts.nameRect.left) - kGripWidth,
+				 static_cast<int>(parts.nameRect.top), 0, 0,
+				 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	SetWindowPos(parts.trackbar, nullptr, static_cast<int>(parts.trackbarRect.left) - kGripWidth,
+				 static_cast<int>(parts.trackbarRect.top),
+				 static_cast<int>(parts.trackbarRect.right - parts.trackbarRect.left) + kGripWidth,
+				 static_cast<int>(parts.trackbarRect.bottom - parts.trackbarRect.top),
+				 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void PlaceRow(HWND host, HWND row, int top) {
+	const RECT rc = RectIn(row, host);
+	if (rc.top == top)
+		return;
 	SetWindowPos(row, nullptr, static_cast<int>(rc.left), top, 0, 0,
 				 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// Poe cada linha no lugar dela, menos a que esta na mao do usuario.
-void LayOutExceptDragged() {
-	for (size_t i = 0; i < g_order.size() && i < g_slotTops.size(); ++i) {
-		if (static_cast<int>(i) == g_dragIndex)
-			continue;
-		PlaceRow(g_order[i], g_slotTops[i]);
-	}
-}
-
-void Finish(bool cancelled) {
-	if (!g_dragging)
+// Poe a lista na ordem que o usuario escolheu.
+void ApplyOrder(HWND host, const std::vector<Row>& rows) {
+	if (rows.empty() || g_desiredOrder.empty())
 		return;
 
-	g_dragging = false;
+	std::vector<std::wstring> present;
+	present.reserve(rows.size());
+	for (const Row& row : rows)
+		present.push_back(row.name);
 
-	// Cancelar devolve a ordem que estava antes do arrasto, e nao so a linha
-	// que estava na mao: as outras ja foram empurradas de lugar no caminho.
-	if (cancelled && g_originalOrder.size() == g_slotTops.size()) {
-		g_order = g_originalOrder;
-		g_dragIndex = -1;
-		for (size_t i = 0; i < g_order.size(); ++i)
-			PlaceRow(g_order[i], g_slotTops[i]);
-	} else if (g_dragIndex >= 0 && g_dragIndex < static_cast<int>(g_slotTops.size())) {
-		PlaceRow(g_order[static_cast<size_t>(g_dragIndex)], g_slotTops[static_cast<size_t>(g_dragIndex)]);
+	const std::vector<int> arrangement = ApplyDesiredOrder(g_desiredOrder, present);
+	if (arrangement.size() != rows.size())
+		return;
+
+	// Os lugares sao os que a lista ja tem; so muda quem ocupa cada um. Assim a
+	// altura de cada linha e o espacamento continuam sendo os do wx.
+	std::vector<int> slots;
+	slots.reserve(rows.size());
+	for (const Row& row : rows)
+		slots.push_back(row.top);
+	std::sort(slots.begin(), slots.end());
+
+	for (size_t i = 0; i < arrangement.size(); ++i) {
+		const int from = arrangement[i];
+		if (from >= 0 && from < static_cast<int>(rows.size()))
+			PlaceRow(host, rows[static_cast<size_t>(from)].window, slots[i]);
 	}
-
-	if (g_host && IsWindow(g_host))
-		RedrawWindow(g_host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
-
-	LogF("reorder: arrasto %s, linha terminou na posicao %d de %d",
-		 cancelled ? "cancelado" : "concluido", g_dragIndex + 1,
-		 static_cast<int>(g_order.size()));
-
-	g_dragIndex = -1;
 }
 
-// Aplica ou tira as alcas de todas as linhas do painel de agora.
-void RefreshHandles() {
+void RefreshRows() {
+	if (g_drag.active)
+		return;
+
 	HWND host = PickSliderHost(g_frame, g_posePanel);
 	if (!host)
 		return;
 
-	const std::vector<HWND> rows = FindRows(host);
+	const std::vector<Row> rows = FindRows(host);
 	if (rows.empty())
 		return;
 
-	for (HWND row : rows) {
-		if (g_handlesOn)
-			AddHandle(row);
+	for (const Row& row : rows) {
+		if (g_gripsOn)
+			AddGrip(row.window);
 		else
-			RemoveHandle(row);
+			RemoveGrip(row.window);
 	}
 
-	// A contagem sai DEPOIS de mexer: cada alca e um filho novo, entao medir
-	// antes deixaria a proxima checagem achando que a lista mudou de novo.
-	g_handleHost = host;
-	g_handleChildCount = ChildrenOf(host).size();
+	// A ordem escolhida e reaplicada AQUI, e nao so no fim do arrasto: este e o
+	// momento em que a lista acabou de ser refeita pelo programa, e sem isto a
+	// escolha do usuario se perderia na primeira troca de outfit.
+	ApplyOrder(host, rows);
 
-	if (IsWindow(host))
-		RedrawWindow(host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
-
-	LogF("reorder: alcas %s em %d linhas", g_handlesOn ? "postas" : "tiradas",
-		 static_cast<int>(rows.size()));
+	g_knownHost = host;
+	g_knownRows = RowWindows(host);
+	RedrawWindow(host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
 }
 
-// Nota quando a lista muda -- cresce, encolhe ou e refeita -- e repoe as alcas.
+// O painel avisa quando muda.
 //
-// Pela CONTAGEM de filhos do painel, que e barata: uma volta de GetWindow. A
-// versao anterior olhava so se a primeira linha ainda tinha alca, e por isso
-// nao percebia a lista CRESCER: o log mostrou as alcas indo para cem linhas
-// enquanto o programa ainda montava as outras trinta, que ficaram sem.
+// Duas coisas interessam. WM_PARENTNOTIFY conta que uma linha nasceu ou morreu,
+// que e a troca de outfit ou de preset. WM_SIZE conta que o wx acabou de refazer
+// o layout, o que desmancha tanto o deslocamento dentro das linhas quanto a
+// ordem delas.
 //
-// Com folga de tempo entre uma checagem e outra, para nao pagar a volta a cada
-// pixel que o mouse anda.
-void RefreshHandlesIfListChanged() {
-	if (!g_handlesOn)
+// Nos dois casos o trabalho e ADIADO por PostMessage. Mexer nos filhos no meio
+// da passagem de layout do wx e pedir para brigar com ela; deixado para a
+// proxima mensagem, o wx ja terminou e o campo esta livre. Esta e a mesma licao
+// que o painel do Symmetrize ensinou: nao disputar o layout com o wx, deixar que
+// ele acabe e corrigir depois.
+LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (msg == kRecheckMsg) {
+		g_recheckPending = false;
+		RefreshRows();
+		return 0;
+	}
+
+	if (msg == WM_NCDESTROY) {
+		RemoveWindowSubclass(hwnd, HostProc, id);
+		if (hwnd == g_knownHost) {
+			g_knownHost = nullptr;
+			g_knownRows.clear();
+		}
+	}
+
+	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
+
+	if ((msg == WM_SIZE || msg == WM_PARENTNOTIFY) && !g_recheckPending && !g_drag.active) {
+		g_recheckPending = true;
+		PostMessageW(hwnd, kRecheckMsg, 0, 0);
+	}
+	return result;
+}
+
+void WatchHost(HWND host) {
+	if (host && SetWindowSubclass(host, HostProc, kHostSubclassId, 0))
+		LogF("reorder: painel %p sob observacao", static_cast<void*>(host));
+}
+
+// Nota quando a lista muda e repoe alcas e ordem.
+//
+// Uma rede de seguranca por tras do aviso do painel: o painel so pode ser
+// subclassado depois de existir, e ele so existe depois de um outfit carregado.
+// Esta checagem barata, no movimento do mouse, e o que o acha da primeira vez.
+void RecheckOnMouseMove() {
+	if (g_drag.active)
 		return;
 
 	const DWORD now = GetTickCount();
-	if (now - g_lastHandleCheck < 300)
+	if (now - g_lastCheck < 300)
 		return;
-	g_lastHandleCheck = now;
+	g_lastCheck = now;
 
-	if (!g_handleHost || !IsWindow(g_handleHost))
-		g_handleHost = PickSliderHost(g_frame, g_posePanel);
-	if (!g_handleHost)
+	if (!g_knownHost || !IsWindow(g_knownHost)) {
+		HWND host = PickSliderHost(g_frame, g_posePanel);
+		if (!host)
+			return;
+		WatchHost(host);
+		RefreshRows();
 		return;
+	}
 
-	const size_t count = ChildrenOf(g_handleHost).size();
-	if (count == g_handleChildCount)
-		return;
-
-	RefreshHandles();
+	// Comparando os HANDLES, e nao a contagem: um outfit de cento e vinte
+	// sliders trocado por outro de cento e vinte recria todas as janelas sem
+	// mudar o numero, e contar nao perceberia.
+	if (RowWindows(g_knownHost) != g_knownRows)
+		RefreshRows();
 }
 
-void OnHandlesToggled(bool checked) {
-	g_handlesOn = checked;
-	RefreshHandles();
+void ShowSlotAt(int index) {
+	if (!g_drag.slot || index < 0 || index >= static_cast<int>(g_drag.slotTops.size()))
+		return;
+
+	RECT client = {};
+	GetClientRect(g_drag.host, &client);
+	SetWindowPos(g_drag.slot, nullptr, 0, g_drag.slotTops[static_cast<size_t>(index)],
+				 static_cast<int>(client.right), g_drag.rowHeight,
+				 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
-bool BeginDrag(MSG* msg) {
-	// So o FUNDO da linha pega. Clique em controle -- lapis, caixa, barra --
-	// chega com hwnd do controle, e ali o arrasto nao pode roubar nada.
-	HWND host = PickSliderHost(g_frame, g_posePanel);
+void BeginDrag(HWND row) {
+	HWND host = GetParent(row);
 	if (!host)
-		return false;
+		return;
 
-	const std::vector<HWND> rows = FindRows(host);
+	const std::vector<Row> rows = FindRows(host);
+	if (rows.size() < 2)
+		return;
+
 	int index = -1;
 	for (size_t i = 0; i < rows.size(); ++i) {
-		if (rows[i] == msg->hwnd)
+		if (rows[i].window == row)
 			index = static_cast<int>(i);
 	}
+	if (index < 0)
+		return;
 
-	if (index < 0) {
-		// Clique dentro do painel que NAO caiu numa linha.
-		//
-		// E a diferenca entre "o clique foi num controle, e esta certo passar"
-		// e "a area de pega nao existe onde eu achei que existia". As duas se
-		// parecem iguais na tela -- nada acontece -- e sem esta linha a segunda
-		// nao teria como ser diagnosticada.
-		for (HWND walk = msg->hwnd; walk; walk = GetParent(walk)) {
-			if (walk != host)
-				continue;
-			LogF("reorder: clique em %p (classe '%ls') dentro do painel, mas fora de linha -- %d linhas conhecidas",
-				 static_cast<void*>(msg->hwnd), ClassOf(msg->hwnd).c_str(),
-				 static_cast<int>(rows.size()));
-			break;
-		}
-		return false;
-	}
-	if (rows.size() < 2)
-		return false; // uma linha so nao tem para onde ir
+	const RECT rowRect = RectIn(row, host);
 
-	g_host = host;
-	g_order = rows;
-	g_originalOrder = rows;
-	g_slotTops.clear();
-	g_slotTops.reserve(rows.size());
-	for (HWND row : rows)
-		g_slotTops.push_back(TopOf(row, host));
+	g_drag = Drag();
+	g_drag.active = true;
+	g_drag.host = host;
+	g_drag.order = WindowsOf(rows);
+	g_drag.original = g_drag.order;
+	for (const Row& entry : rows)
+		g_drag.slotTops.push_back(entry.top);
+	g_drag.rowHeight = static_cast<int>(rowRect.bottom - rowRect.top);
+	g_drag.index = index;
 
 	POINT cursor = {};
 	GetCursorPos(&cursor);
 	ScreenToClient(host, &cursor);
+	g_drag.grabOffset = static_cast<int>(cursor.y) - g_drag.slotTops[static_cast<size_t>(index)];
 
-	g_dragging = true;
-	g_dragIndex = index;
-	g_grabOffset = static_cast<int>(cursor.y) - g_slotTops[static_cast<size_t>(index)];
+	g_drag.slot = CreateWindowExW(0, L"STATIC", L"", WS_CHILD, 0, 0, 0, 0, host, nullptr,
+								  reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(host, GWLP_HINSTANCE)),
+								  nullptr);
+	if (g_drag.slot) {
+		SetWindowSubclass(g_drag.slot, SlotProc, kSlotSubclassId, 0);
+		ShowSlotAt(index);
+	}
+
+	// A linha na mao vai para o topo da z-order, senao ela passa POR TRAS das
+	// vizinhas e do vao enquanto e arrastada, e parece ter sumido.
+	SetWindowPos(row, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
 	LogF("reorder: peguei a linha %d de %d", index + 1, static_cast<int>(rows.size()));
-
-	// A geometria de UMA linha, uma unica vez por sessao.
-	//
-	// E o que falta para saber se cabe um botao de arrastar ao lado do lapis e
-	// da caixa, ou se seria preciso empurrar os controles do programa para
-	// abrir espaco. Sem a medida, decidir isso seria adivinhar de novo -- e
-	// adivinhar geometria ja custou tres versoes da busca do symmetrize.
-	static bool measured = false;
-	if (!measured) {
-		measured = true;
-		RECT rowRect = {};
-		GetWindowRect(msg->hwnd, &rowRect);
-		LogF("reorder: linha %ldx%ld, filhos:", rowRect.right - rowRect.left,
-			 rowRect.bottom - rowRect.top);
-
-		for (HWND child : ChildrenOf(msg->hwnd)) {
-			RECT rc = {};
-			GetWindowRect(child, &rc);
-			MapWindowPoints(nullptr, msg->hwnd, reinterpret_cast<POINT*>(&rc), 2);
-			LogF("  %ls em (%ld,%ld) %ldx%ld", ClassOf(child).c_str(), rc.left, rc.top,
-				 rc.right - rc.left, rc.bottom - rc.top);
-		}
-	}
-	return true;
 }
 
-void DragTo(MSG*) {
-	if (!g_dragging || !g_host)
+void DragToCursor() {
+	if (!g_drag.active || !g_drag.host)
 		return;
-
-	// Soltar fora da janela nao entrega o WM_LBUTTONUP aqui. Sem isto o
-	// arrasto ficaria aberto e a lista continuaria seguindo o mouse solto.
-	if ((GetKeyState(VK_LBUTTON) & 0x8000) == 0) {
-		Finish(false);
-		return;
-	}
 
 	POINT cursor = {};
 	GetCursorPos(&cursor);
-	ScreenToClient(g_host, &cursor);
+	ScreenToClient(g_drag.host, &cursor);
+	const int carried = static_cast<int>(cursor.y) - g_drag.grabOffset;
 
-	const int wanted = SlotAt(g_slotTops, static_cast<int>(cursor.y) - g_grabOffset);
-	if (wanted >= 0 && wanted != g_dragIndex) {
-		MoveInOrder(g_order, g_dragIndex, wanted);
-		g_dragIndex = wanted;
-		LayOutExceptDragged();
+	const int wanted = SlotAt(g_drag.slotTops, carried);
+	if (wanted >= 0 && wanted != g_drag.index) {
+		MoveInOrder(g_drag.order, g_drag.index, wanted);
+		g_drag.index = wanted;
+
+		// As outras acomodam nos lugares; a da mao fica de fora, seguindo o
+		// cursor -- e o que faz parecer que ela esta sendo carregada. O lugar
+		// que sobra e o do vao.
+		for (size_t i = 0; i < g_drag.order.size() && i < g_drag.slotTops.size(); ++i) {
+			if (static_cast<int>(i) != g_drag.index)
+				PlaceRow(g_drag.host, g_drag.order[i], g_drag.slotTops[i]);
+		}
+		ShowSlotAt(g_drag.index);
 	}
 
-	// A linha na mao segue o cursor, e nao o lugar: e o que da a sensacao de
-	// estar carregando alguma coisa em vez de ver a lista piscar.
-	PlaceRow(g_order[static_cast<size_t>(g_dragIndex)], static_cast<int>(cursor.y) - g_grabOffset);
+	PlaceRow(g_drag.host, g_drag.order[static_cast<size_t>(g_drag.index)], carried);
+}
+
+void FinishDrag(bool cancelled) {
+	if (!g_drag.active)
+		return;
+
+	g_drag.active = false;
+
+	if (g_drag.slot) {
+		DestroyWindow(g_drag.slot);
+		g_drag.slot = nullptr;
+	}
+
+	if (cancelled)
+		g_drag.order = g_drag.original;
+
+	for (size_t i = 0; i < g_drag.order.size() && i < g_drag.slotTops.size(); ++i)
+		PlaceRow(g_drag.host, g_drag.order[i], g_drag.slotTops[i]);
+
+	// A escolha e guardada por NOME, que e o que sobrevive a lista ser refeita.
+	if (!cancelled) {
+		g_desiredOrder.clear();
+		for (HWND row : g_drag.order) {
+			std::wstring name = NameOf(row);
+			if (!name.empty())
+				g_desiredOrder.push_back(std::move(name));
+		}
+	}
+
+	if (g_drag.host && IsWindow(g_drag.host)) {
+		RedrawWindow(g_drag.host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+		g_knownRows = RowWindows(g_drag.host);
+	}
+
+	LogF("reorder: arrasto %s, %d nomes na ordem guardada",
+		 cancelled ? "cancelado" : "concluido", static_cast<int>(g_desiredOrder.size()));
+
+	g_drag = Drag();
+}
+
+void OnGripsToggled(bool checked) {
+	g_gripsOn = checked;
+	RefreshRows();
+	LogF("reorder: alcas %s pelo menu", checked ? "ligadas" : "desligadas");
 }
 
 } // namespace
@@ -515,7 +723,7 @@ int SlotAt(const std::vector<int>& slotTops, int y) {
 		return -1;
 
 	// Antes do primeiro lugar e depois do ultimo caem nas pontas, e nao em
-	// "nenhum": arrastar para fora da lista tem que levar a linha para o topo
+	// "nenhum": arrastar para fora da lista quer dizer levar a linha para o topo
 	// ou para o fim, que e o que o usuario esta pedindo ao fazer isso.
 	if (y <= slotTops.front())
 		return 0;
@@ -540,6 +748,35 @@ void MoveInOrder(std::vector<HWND>& order, int from, int to) {
 	order.insert(order.begin() + to, moved);
 }
 
+std::vector<int> ApplyDesiredOrder(const std::vector<std::wstring>& desired,
+								   const std::vector<std::wstring>& present) {
+	std::vector<int> out;
+	out.reserve(present.size());
+
+	std::vector<bool> used(present.size(), false);
+
+	// Primeiro os que o usuario ordenou, na ordem dele. Nome repetido consome um
+	// slider de cada vez, e nome que sumiu simplesmente nao entra.
+	for (const std::wstring& name : desired) {
+		for (size_t i = 0; i < present.size(); ++i) {
+			if (used[i] || present[i] != name)
+				continue;
+			used[i] = true;
+			out.push_back(static_cast<int>(i));
+			break;
+		}
+	}
+
+	// Depois o que apareceu e ele nunca ordenou -- outro outfit, outro projeto --
+	// na ordem em que o programa os deu. Descarta-los seria sumir com slider.
+	for (size_t i = 0; i < present.size(); ++i) {
+		if (!used[i])
+			out.push_back(static_cast<int>(i));
+	}
+
+	return out;
+}
+
 namespace SliderReorder {
 
 bool Install(HWND frame) {
@@ -548,64 +785,52 @@ bool Install(HWND frame) {
 
 	const PosePanel pose = FindPosePanel(frame);
 	g_posePanel = pose.ok ? pose.panel : nullptr;
-	g_handlesOn = Cfg().sliderDragHandles;
+	g_gripsOn = Cfg().sliderDragHandles;
 
-	if (HMENU view = MenuToggle::FindMenu(frame, "menuView")) {
-		g_handleMenuId = MenuToggle::Add(frame, view, L"Slider drag handles",
-										 g_handlesOn, OnHandlesToggled);
-	}
+	if (HMENU view = MenuToggle::FindMenu(frame, "menuView"))
+		MenuToggle::Add(frame, view, L"Slider drag handles", g_gripsOn, OnGripsToggled);
 
 	g_installed = true;
-	LogF("reorder: pronto (arraste pela alca ou pelo fundo da linha), alcas %s",
-		 g_handlesOn ? "ligadas" : "desligadas");
+
+	// O painel ainda nao existe nesta altura -- ele nasce com o primeiro outfit
+	// carregado. Quem o acha e a checagem no movimento do mouse.
+	LogF("reorder: pronto, alcas %s", g_gripsOn ? "ligadas" : "desligadas");
 	return true;
 }
 
 void Uninstall() {
-	Finish(true);
+	if (g_drag.active)
+		FinishDrag(true);
+
+	if (g_knownHost && IsWindow(g_knownHost))
+		RemoveWindowSubclass(g_knownHost, HostProc, kHostSubclassId);
+
 	g_frame = nullptr;
 	g_posePanel = nullptr;
-	g_host = nullptr;
 	g_installed = false;
-	g_handleHost = nullptr;
-	g_handleChildCount = 0;
-	g_handleMenuId = 0;
-	g_order.clear();
-	g_originalOrder.clear();
-	g_slotTops.clear();
+	g_knownHost = nullptr;
+	g_knownRows.clear();
+	g_recheckPending = false;
+	g_drag = Drag();
 }
 
 bool HandleMouseMessage(MSG* msg) {
 	if (!g_installed || !msg)
 		return false;
 
-	switch (msg->message) {
-		case WM_LBUTTONDOWN:
-			return BeginDrag(msg);
-
-		case WM_MOUSEMOVE:
-			if (!g_dragging) {
-				RefreshHandlesIfListChanged();
-				return false;
-			}
-			DragTo(msg);
-			return true;
-
-		case WM_LBUTTONUP:
-			if (!g_dragging)
-				return false;
-			Finish(false);
-			return true;
-
-		case WM_KEYDOWN:
-			if (!g_dragging || msg->wParam != VK_ESCAPE)
-				return false;
-			Finish(true);
-			return true;
-
-		default:
-			return false;
+	// O gesto pertence a alca, que capturou o mouse. Aqui sobra o Esc, que ela
+	// nao recebe por nao ter foco de teclado, e a checagem barata de a lista ter
+	// sido refeita.
+	if (msg->message == WM_KEYDOWN && msg->wParam == VK_ESCAPE && g_drag.active) {
+		FinishDrag(true);
+		ReleaseCapture();
+		return true;
 	}
+
+	if (msg->message == WM_MOUSEMOVE)
+		RecheckOnMouseMove();
+
+	return false;
 }
 
 } // namespace SliderReorder

@@ -15,10 +15,21 @@
 // estado das marcacoes nunca e tocado aqui. Uma linha escondida pelo filtro
 // continua marcada, como no Choose Groups.
 //
-// A recomposicao da lista e do proprio wx. Um sizer nao reserva espaco para
-// janela escondida, entao basta esconder as linhas e provocar um novo layout:
-// ele fecha os buracos e refaz a faixa de rolagem sozinho. Fazer a geometria na
-// mao daria errado no primeiro rolar da lista.
+// A recomposicao da lista e NOSSA, e isso e o contrario do que esta feature
+// supos no comeco.
+//
+// A ideia inicial era que bastasse esconder as linhas e pedir um novo layout: um
+// sizer nao reserva espaco para janela escondida, entao o wx fecharia os buracos
+// e refaria a faixa de rolagem sozinho. Nao acontece. Esconder por ShowWindow
+// nao e o mesmo que chamar wxWindow::Show(false): o wx continua com as cento e
+// quarenta e tres linhas no layout dele, e o painel continua medindo a altura de
+// todas -- e o vazio embaixo dos resultados que o usuario relatou tres vezes.
+//
+// Daqui saem duas realidades ao mesmo tempo: a do Windows, onde dezoito linhas
+// estao visiveis e compactadas, e a do wx, onde as cento e quarenta e tres ainda
+// pertencem ao sizer. So a primeira esta ao alcance de um DLL que atua de fora,
+// entao os buracos sao fechados na mao: as linhas sao reposicionadas, o painel e
+// encolhido e a faixa de rolagem e reescrita.
 namespace SymmetrizeSearch {
 
 bool Install(HWND frame);

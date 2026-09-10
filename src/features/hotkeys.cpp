@@ -162,9 +162,9 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 		StrokeStabilizer::RewriteStrokeMessage(msg);
 	}
 
-	// O reorder e o unico destes que CONSOME a mensagem: enquanto uma linha
-	// esta sendo arrastada, o clique e o movimento pertencem ao arrasto e nao
-	// podem seguir para o painel.
+	// O reorder consome uma mensagem so: o Esc que cancela um arrasto em curso.
+	// O resto do gesto nao passa por aqui -- a alca captura o mouse no aperto, e
+	// dai em diante o clique, o movimento e o soltar vao direto para ela.
 	if (SliderReorder::HandleMouseMessage(msg)) {
 		msg->message = WM_NULL;
 		msg->wParam = 0;
