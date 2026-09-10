@@ -66,7 +66,17 @@ const int kHandleId = 0xBF03;
 
 bool g_handlesOn = true;
 UINT g_handleMenuId = 0;
-HWND g_handleAnchor = nullptr; // uma linha ja tratada, para notar a lista refeita
+
+// O painel e quantos filhos ele tinha da ultima vez.
+//
+// A contagem, e nao uma linha de referencia: o log mostrou que a lista e
+// POPULADA aos poucos -- as alcas foram para cem linhas e trinta segundos
+// depois havia cento e trinta. Uma referencia na primeira linha continuava
+// valida e as trinta novas ficavam sem alca para sempre. A contagem muda
+// quando a lista cresce, encolhe ou e refeita.
+HWND g_handleHost = nullptr;
+size_t g_handleChildCount = 0;
+DWORD g_lastHandleCheck = 0;
 
 HWND HandleOf(HWND row) {
 	return GetDlgItem(row, kHandleId);
@@ -126,7 +136,11 @@ void AddHandle(HWND row) {
 	// Static, e nao Button, de proposito: Static sem SS_NOTIFY devolve o clique
 	// ao pai, entao a alca pega o arrasto pelo mesmo caminho que o fundo da
 	// linha ja usa. Um botao consumiria o clique e nao arrastaria nada.
-	HWND handle = CreateWindowExW(0, L"STATIC", L"≡",
+	// O simbolo vai por escape, e nao como caractere no proprio arquivo: sem
+	// /utf-8 o compilador le os bytes do fonte na codificacao do sistema, e os
+	// tres bytes do "identico a" viram tres letras acentuadas. Foi exatamente
+	// isso que apareceu na tela no lugar da alca: "ali" com acentos.
+	HWND handle = CreateWindowExW(0, L"STATIC", L"\u2261",
 								  WS_CHILD | WS_VISIBLE | SS_CENTER,
 								  2, top > 0 ? top : 0, size, size, row,
 								  reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kHandleId)),
@@ -244,18 +258,45 @@ void RefreshHandles() {
 			RemoveHandle(row);
 	}
 
-	g_handleAnchor = g_handlesOn ? rows.front() : nullptr;
+	// A contagem sai DEPOIS de mexer: cada alca e um filho novo, entao medir
+	// antes deixaria a proxima checagem achando que a lista mudou de novo.
+	g_handleHost = host;
+	g_handleChildCount = ChildrenOf(host).size();
+
+	if (IsWindow(host))
+		RedrawWindow(host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+
 	LogF("reorder: alcas %s em %d linhas", g_handlesOn ? "postas" : "tiradas",
 		 static_cast<int>(rows.size()));
 }
 
-// A lista e refeita a cada troca de outfit, e as alcas morrem com as linhas
-// velhas. Uma checagem de uma chamada por movimento de mouse basta para notar.
-void RefreshHandlesIfListWasRebuilt() {
+// Nota quando a lista muda -- cresce, encolhe ou e refeita -- e repoe as alcas.
+//
+// Pela CONTAGEM de filhos do painel, que e barata: uma volta de GetWindow. A
+// versao anterior olhava so se a primeira linha ainda tinha alca, e por isso
+// nao percebia a lista CRESCER: o log mostrou as alcas indo para cem linhas
+// enquanto o programa ainda montava as outras trinta, que ficaram sem.
+//
+// Com folga de tempo entre uma checagem e outra, para nao pagar a volta a cada
+// pixel que o mouse anda.
+void RefreshHandlesIfListChanged() {
 	if (!g_handlesOn)
 		return;
-	if (g_handleAnchor && IsWindow(g_handleAnchor) && HandleOf(g_handleAnchor))
+
+	const DWORD now = GetTickCount();
+	if (now - g_lastHandleCheck < 300)
 		return;
+	g_lastHandleCheck = now;
+
+	if (!g_handleHost || !IsWindow(g_handleHost))
+		g_handleHost = PickSliderHost(g_frame, g_posePanel);
+	if (!g_handleHost)
+		return;
+
+	const size_t count = ChildrenOf(g_handleHost).size();
+	if (count == g_handleChildCount)
+		return;
+
 	RefreshHandles();
 }
 
@@ -427,7 +468,8 @@ void Uninstall() {
 	g_posePanel = nullptr;
 	g_host = nullptr;
 	g_installed = false;
-	g_handleAnchor = nullptr;
+	g_handleHost = nullptr;
+	g_handleChildCount = 0;
 	g_handleMenuId = 0;
 	g_order.clear();
 	g_originalOrder.clear();
@@ -444,7 +486,7 @@ bool HandleMouseMessage(MSG* msg) {
 
 		case WM_MOUSEMOVE:
 			if (!g_dragging) {
-				RefreshHandlesIfListWasRebuilt();
+				RefreshHandlesIfListChanged();
 				return false;
 			}
 			DragTo(msg);
