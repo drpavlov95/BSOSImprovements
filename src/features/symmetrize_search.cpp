@@ -291,6 +291,44 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 //
 // Roda ANTES de esconder qualquer coisa: depois de esconder a tela ja nao e
 // mais a regua. Enquanto nada esta escondido, ela e.
+// Encolhe a faixa de rolagem ate o que sobrou de conteudo.
+//
+// Sem isto, filtrar deixa a lista curta mas a barra continua deixando rolar a
+// altura toda de antes -- e o que o usuario ve embaixo dos resultados nao e
+// espaco das linhas escondidas, e sim faixa de rolagem vazia. As linhas ja
+// foram compactadas; o que faltava era contar ao Windows que o conteudo
+// encolheu.
+void ShrinkScrollRangeToContent() {
+	if (!g_scroll || !IsWindow(g_scroll))
+		return;
+
+	int bottom = 0;
+	for (HWND child : ChildrenOf(g_scroll)) {
+		if (!IsWindowVisible(child))
+			continue;
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
+		if (rc.bottom > bottom)
+			bottom = static_cast<int>(rc.bottom);
+	}
+	if (bottom <= 0)
+		return;
+
+	RECT client = {};
+	GetClientRect(g_scroll, &client);
+	const int page = static_cast<int>(client.bottom - client.top);
+
+	SCROLLINFO info = {};
+	info.cbSize = sizeof(info);
+	info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+	info.nMin = 0;
+	info.nMax = bottom;
+	info.nPage = static_cast<UINT>(page > 0 ? page : 1);
+	info.nPos = 0;
+	SetScrollInfo(g_scroll, SB_VERT, &info, TRUE);
+}
+
 void RefreshRulers() {
 	for (AsymRow& row : g_rows) {
 		if (!row.visible)
@@ -305,6 +343,15 @@ void ApplyFilter() {
 		return;
 
 	RefreshRulers();
+
+	// Volta ao topo ANTES de medir qualquer coisa.
+	//
+	// Duas razoes. A lista rolada era o que deixava o usuario olhando para um
+	// vazio: os resultados estavam la em cima, fora da vista, e embaixo so
+	// sobrava faixa de rolagem. E a regua so faz sentido com o conteudo na
+	// origem -- rolar move os filhos, e medir no meio da rolagem daria
+	// posicoes que nao valem depois.
+	SendMessageW(g_scroll, WM_VSCROLL, MAKEWPARAM(SB_TOP, 0), 0);
 
 	const std::wstring query = SearchText();
 	int shown = 0;
@@ -348,6 +395,8 @@ void ApplyFilter() {
 		for (HWND host : hosts)
 			CompactHost(host);
 	}
+
+	ShrinkScrollRangeToContent();
 
 	SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
 	if (touched > 0)

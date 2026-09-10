@@ -82,6 +82,27 @@ HWND HandleOf(HWND row) {
 	return GetDlgItem(row, kHandleId);
 }
 
+// A fonte da alca, criada uma vez e compartilhada por todas as linhas.
+//
+// Maior que a da linha de proposito: com a fonte do texto o simbolo sai um
+// risquinho no meio de um botao vazio. Com a altura do proprio botao, os tres
+// tracos ocupam a largura dele, que e o que se espera de uma alca de arrastar.
+//
+// A cor nao e escolhida aqui: um Static pega a cor do pai por WM_CTLCOLORSTATIC,
+// entao ela acompanha o tema claro ou escuro sem nada a mais.
+HFONT HandleFont(int size) {
+	static HFONT font = nullptr;
+	if (!font) {
+		LOGFONTW desc = {};
+		desc.lfHeight = -(size - 2);
+		desc.lfWeight = FW_NORMAL;
+		desc.lfCharSet = DEFAULT_CHARSET;
+		wcscpy_s(desc.lfFaceName, L"Segoe UI Symbol");
+		font = CreateFontIndirectW(&desc);
+	}
+	return font;
+}
+
 // Poe a alca numa linha e empurra o resto para a direita.
 //
 // Quem tem a barra encolhe em vez de andar: se ela tambem andasse, o campo de
@@ -128,10 +149,33 @@ void AddHandle(HWND row) {
 		// A direita da barra fica onde esta: o valor nao pode sair da linha.
 	}
 
+	// Do tamanho e na altura do botao de edit mode, e nao de um tamanho
+	// inventado: a alca fica ao LADO dele, e dois botoes vizinhos de alturas
+	// diferentes leem como defeito.
+	//
+	// A medida sai do proprio lapis, que e o controle mais a esquerda da linha,
+	// entao ela acompanha se o programa mudar de tamanho ou o usuario mexer no
+	// DPI.
+	RECT pencil = {};
+	bool havePencil = false;
+	for (HWND child : children) {
+		if (child == HandleOf(row))
+			continue;
+		RECT rc = {};
+		GetWindowRect(child, &rc);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&rc), 2);
+		if (!havePencil || rc.left < pencil.left) {
+			pencil = rc;
+			havePencil = true;
+		}
+	}
+
 	RECT rowRect = {};
 	GetClientRect(row, &rowRect);
-	const int size = 16;
-	const int top = (static_cast<int>(rowRect.bottom) - size) / 2;
+
+	const int size = havePencil ? static_cast<int>(pencil.bottom - pencil.top) : 20;
+	const int top = havePencil ? static_cast<int>(pencil.top)
+							   : (static_cast<int>(rowRect.bottom) - size) / 2;
 
 	// Static, e nao Button, de proposito: Static sem SS_NOTIFY devolve o clique
 	// ao pai, entao a alca pega o arrasto pelo mesmo caminho que o fundo da
@@ -140,9 +184,13 @@ void AddHandle(HWND row) {
 	// /utf-8 o compilador le os bytes do fonte na codificacao do sistema, e os
 	// tres bytes do "identico a" viram tres letras acentuadas. Foi exatamente
 	// isso que apareceu na tela no lugar da alca: "ali" com acentos.
+	// Encaixa exatamente no vao que o empurrao abriu, colada no lapis.
+	const int left = havePencil ? static_cast<int>(pencil.left) - kHandleShift : 0;
+
 	HWND handle = CreateWindowExW(0, L"STATIC", L"\u2261",
-								  WS_CHILD | WS_VISIBLE | SS_CENTER,
-								  2, top > 0 ? top : 0, size, size, row,
+								  WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
+								  left > 0 ? left : 0, top > 0 ? top : 0,
+								  kHandleShift, size, row,
 								  reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kHandleId)),
 								  reinterpret_cast<HINSTANCE>(
 									  GetWindowLongPtrW(row, GWLP_HINSTANCE)),
@@ -150,8 +198,20 @@ void AddHandle(HWND row) {
 	if (!handle)
 		return;
 
-	if (HFONT font = reinterpret_cast<HFONT>(SendMessageW(row, WM_GETFONT, 0, 0)))
-		SendMessageW(handle, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+	SendMessageW(handle, WM_SETFONT, reinterpret_cast<WPARAM>(HandleFont(size)), TRUE);
+
+	// A posicao da primeira, uma vez por sessao. Sem isto, "nao aparece" e
+	// "aparece no lugar errado" contam a mesma historia no log -- nenhuma.
+	static bool logged = false;
+	if (!logged) {
+		logged = true;
+		RECT placed = {};
+		GetWindowRect(handle, &placed);
+		MapWindowPoints(nullptr, row, reinterpret_cast<POINT*>(&placed), 2);
+		LogF("reorder: alca em (%ld,%ld) %ldx%ld, lapis em (%ld,%ld) %ldx%ld",
+			 placed.left, placed.top, placed.right - placed.left, placed.bottom - placed.top,
+			 pencil.left, pencil.top, pencil.right - pencil.left, pencil.bottom - pencil.top);
+	}
 }
 
 // Tira a alca e devolve os controles ao lugar.
