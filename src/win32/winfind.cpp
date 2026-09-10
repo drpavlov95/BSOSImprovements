@@ -63,6 +63,10 @@ void CollectDescendants(HWND root, const wchar_t* cls, std::vector<HWND>& out) {
 
 } // namespace
 
+bool HasVisibleStyle(HWND window) {
+	return window && (GetWindowLongW(window, GWL_STYLE) & WS_VISIBLE) != 0;
+}
+
 std::vector<HWND> FindDescendantsByClass(HWND root, const wchar_t* cls) {
 	std::vector<HWND> out;
 	if (root && cls)

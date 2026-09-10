@@ -172,3 +172,51 @@ TEST(DetectsTextInputFocus) {
 	DestroyWindow(host);
 	return true;
 }
+
+TEST(VisibleStyleAnswersAboutTheWindowNotItsAncestors) {
+	static bool registered = false;
+	if (!registered) {
+		WNDCLASSW wc = {};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"BSOSVisibleHost";
+		RegisterClassW(&wc);
+		registered = true;
+	}
+
+	HWND top = CreateWindowExW(0, L"BSOSVisibleHost", L"top", WS_OVERLAPPEDWINDOW,
+							   -4000, -4000, 300, 200, nullptr, nullptr,
+							   GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(top != nullptr);
+	ShowWindow(top, SW_SHOWNA);
+
+	// Um painel intermediario SEM WS_VISIBLE, com um filho que tem.
+	//
+	// E a forma exata do que o Outfit Studio faz: o diagnostico mediu cento e
+	// quarenta e quatro barras desenhadas na tela com IsWindowVisible dizendo
+	// "nao" para cento e quarenta e tres, porque ela exige a cadeia inteira de
+	// pais marcada. Duas features foram construidas sobre essa pergunta antes
+	// de ficar claro que ela nao serve aqui.
+	HWND middle = CreateWindowExW(0, L"BSOSVisibleHost", L"", WS_CHILD, 0, 0, 200, 100,
+								  top, nullptr, GetModuleHandleW(nullptr), nullptr);
+	HWND leaf = CreateWindowExW(0, L"BSOSVisibleHost", L"", WS_CHILD | WS_VISIBLE,
+								0, 0, 100, 20, middle, nullptr,
+								GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(middle != nullptr && leaf != nullptr);
+
+	// As duas perguntas discordam, e e por isso que o modulo existe.
+	TEST_ASSERT(!IsWindowVisible(leaf));
+	TEST_ASSERT(HasVisibleStyle(leaf));
+
+	// E ela continua respondendo "nao" para o que foi realmente escondido, que
+	// e o caso que as features precisam descartar: painel recolhido.
+	TEST_ASSERT(!HasVisibleStyle(middle));
+
+	ShowWindow(leaf, SW_HIDE);
+	TEST_ASSERT(!HasVisibleStyle(leaf));
+
+	TEST_ASSERT(!HasVisibleStyle(nullptr));
+
+	DestroyWindow(top);
+	return true;
+}

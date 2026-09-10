@@ -211,7 +211,7 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 		return; // o painel nao pendura na area que rola: nao mexe
 
 	// Grupo recolhido pelo usuario: quem manda no tamanho e o wx.
-	if (!IsWindowVisible(host))
+	if (!HasVisibleStyle(host))
 		return;
 
 	// Onde termina a ultima linha que sobrou.
@@ -304,7 +304,7 @@ void ShrinkScrollRangeToContent() {
 
 	int bottom = 0;
 	for (HWND child : ChildrenOf(g_scroll)) {
-		if (!IsWindowVisible(child))
+		if (!HasVisibleStyle(child))
 			continue;
 		RECT rc = {};
 		GetWindowRect(child, &rc);

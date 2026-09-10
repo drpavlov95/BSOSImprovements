@@ -12,6 +12,19 @@ std::wstring ClassOf(HWND hwnd);
 HWND FindChildByClass(HWND parent, const wchar_t* cls, int nth = 0);
 HWND FindDescendantByClass(HWND root, const wchar_t* cls, int nth = 0);
 
+// Se a JANELA esta marcada como visivel, sem perguntar pelos ancestrais dela.
+//
+// IsWindowVisible mente neste programa. O diagnostico mediu: cento e quarenta e
+// quatro barras deslizantes desenhadas na tela, e IsWindowVisible respondendo
+// "nao" para cento e quarenta e tres delas -- porque exige que TODA a cadeia de
+// pais tenha WS_VISIBLE, e algum painel intermediario do Outfit Studio nao tem,
+// mesmo com o conteudo a mostra.
+//
+// Para "o usuario esta vendo isto?", que e o que quase sempre se quer perguntar
+// aqui, o estilo da propria janela e a resposta certa. Duas features foram
+// construidas sobre a pergunta errada antes disso ficar claro.
+bool HasVisibleStyle(HWND window);
+
 // Todos os descendentes com essa classe, em profundidade e pre-ordem.
 std::vector<HWND> FindDescendantsByClass(HWND root, const wchar_t* cls);
 

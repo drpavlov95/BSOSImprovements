@@ -55,12 +55,12 @@ void LogWhyNothingWasFound(HWND frame, HWND exclude) {
 	int visibleHost = 0;
 	int excluded = 0;
 	for (HWND slider : all) {
-		if (IsWindowVisible(slider))
+		if (HasVisibleStyle(slider))
 			++visibleSelf;
 		HWND host = GetParent(slider);
 		if (host == exclude)
 			++excluded;
-		else if (host && IsWindowVisible(host))
+		else if (host && HasVisibleStyle(host))
 			++visibleHost;
 	}
 
@@ -119,7 +119,7 @@ HWND PickAtLevel(HWND frame, HWND exclude, int level) {
 		// Perguntar ao painel serve igual para o que aquela regra queria
 		// resolver: painel recolhido esta escondido, e as barras dentro dele
 		// saem da conta junto.
-		if (!IsWindowVisible(host))
+		if (!HasVisibleStyle(host))
 			continue;
 
 		bool known = false;
