@@ -46,6 +46,8 @@ UINT g_deferredLayout = 0;
 // antigo, quem desfaz e o wx, e a correcao tem que vir DEPOIS do layout dele em
 // vez de tentar preve-lo.
 UINT g_deferredAudit = 0;
+UINT g_deferredGeometry = 0;
+bool g_redrawHeld = false;
 HWND g_auditHost = nullptr;
 HWND g_auditWrapper = nullptr;
 int g_auditWanted = 0;
@@ -309,19 +311,41 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	if (g_deferredAudit && g_dialog)
 		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
 
-	// E tudo que estava abaixo dele sobe ou desce junto.
-	for (HWND sibling : ChildrenOf(g_scroll)) {
-		if (sibling == wrapper)
+	// E tudo que vem DEPOIS dele na lista sobe ou desce junto.
+	//
+	// Depois na ORDEM, e nao "abaixo do rodape do envelope". A versao anterior
+	// comparava o topo de cada irmao com wrapperRect.bottom, e bastava o wx pos
+	// uma borda ou um espacamento que fizesse o proximo grupo comecar um ou dois
+	// pixels antes desse rodape para ele ser dado como "acima" e ficar parado --
+	// sobrepondo o grupo que acabou de encolher. Ordenar os irmaos pelo topo e
+	// mover os que estao depois do envelope nao depende de nenhuma folga.
+	struct Sibling {
+		HWND window;
+		RECT rect;
+	};
+
+	std::vector<Sibling> siblings;
+	for (HWND child : ChildrenOf(g_scroll)) {
+		Sibling entry = {};
+		entry.window = child;
+		GetWindowRect(child, &entry.rect);
+		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&entry.rect), 2);
+		siblings.push_back(entry);
+	}
+	std::sort(siblings.begin(), siblings.end(),
+			  [](const Sibling& a, const Sibling& b) { return a.rect.top < b.rect.top; });
+
+	bool passedWrapper = false;
+	for (const Sibling& sibling : siblings) {
+		if (sibling.window == wrapper) {
+			passedWrapper = true;
+			continue;
+		}
+		if (!passedWrapper)
 			continue;
 
-		RECT rc = {};
-		GetWindowRect(sibling, &rc);
-		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
-		if (rc.top < wrapperRect.bottom)
-			continue; // esta acima do painel: nao se mexe
-
-		SetWindowPos(sibling, nullptr, static_cast<int>(rc.left),
-					 static_cast<int>(rc.top) + delta, 0, 0,
+		SetWindowPos(sibling.window, nullptr, static_cast<int>(sibling.rect.left),
+					 static_cast<int>(sibling.rect.top) + delta, 0, 0,
 					 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 }
@@ -421,10 +445,13 @@ void ApplyFilter() {
 	int shown = 0;
 	int touched = 0;
 
-	// Sem redesenhar no meio: um projeto grande tem centenas de linhas, e
-	// deixar cada uma aparecer e sumir por conta propria faria a lista piscar a
-	// cada tecla digitada.
-	SendMessageW(g_scroll, WM_SETREDRAW, FALSE, 0);
+	// Sem redesenhar no meio: um projeto grande tem centenas de linhas, e deixar
+	// cada uma aparecer e sumir por conta propria faria a lista piscar a cada
+	// tecla digitada. Fica segurado ate a fase adiada devolver, mais abaixo.
+	if (!g_redrawHeld) {
+		SendMessageW(g_scroll, WM_SETREDRAW, FALSE, 0);
+		g_redrawHeld = true;
+	}
 
 	for (AsymRow& row : g_rows) {
 		// Cabecalho fica, sempre. Sem isto, uma consulta que nao casasse com
@@ -445,29 +472,64 @@ void ApplyFilter() {
 			ShowWindow(cell.window, visible ? SW_SHOW : SW_HIDE);
 	}
 
+	// A geometria fica para DEPOIS, numa mensagem adiada.
+	//
+	// Esconder uma linha faz o wx querer refazer o layout dela. Medir e mover
+	// no mesmo ciclo do ShowWindow e disputar a regua com ele enquanto ele ainda
+	// esta mexendo nela -- e quem escreve por ultimo ganha, que nunca somos nos.
+	// Adiado, o wx ja terminou tudo o que tinha para fazer e a geometria e
+	// aplicada por cima do resultado final dele.
+	//
+	// E a mesma licao do reorder de sliders, que so passou a funcionar quando
+	// parou de tentar prever o layout do wx e passou a corrigi-lo depois.
 	if (touched > 0) {
-		// Um painel por vez: cada grupo recolhivel tem a propria regua de
-		// lugares, e misturar as duas empilharia osso em cima de slider.
-		std::vector<HWND> hosts;
-		for (const AsymRow& row : g_rows) {
-			bool known = false;
-			for (HWND seen : hosts)
-				known = known || (seen == row.host);
-			if (!known)
-				hosts.push_back(row.host);
-		}
-		for (HWND host : hosts)
-			CompactHost(host);
+		if (!g_deferredGeometry)
+			g_deferredGeometry = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeGeometry");
+		if (g_deferredGeometry && g_dialog)
+			PostMessageW(g_dialog, g_deferredGeometry, 0, 0);
 	}
 
-	ShrinkScrollRangeToContent();
-
-	SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
-	if (touched > 0)
-		RedrawWindow(g_scroll, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+	// O desenho fica segurado ate la, senao a lista pisca uma vez sem compactar
+	// entre uma tecla e a proxima. Se nada mudou, nao ha fase adiada e ele volta
+	// agora mesmo.
+	if (touched == 0) {
+		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
+		g_redrawHeld = false;
+	}
 
 	LogF("symmetrize: filtro '%ls' -- %d de %d linhas visiveis, %d mudaram",
 		 query.c_str(), shown, static_cast<int>(g_rows.size()), touched);
+}
+
+// A geometria do filtro, aplicada depois que o wx terminou a dele.
+//
+// Compacta as linhas, encolhe os paineis, empurra os grupos seguintes e
+// reescreve a faixa de rolagem -- as quatro coisas juntas, porque cada uma
+// depende do resultado da anterior.
+void ApplyFilteredGeometry() {
+	if (!g_scroll || !IsWindow(g_scroll) || g_rows.empty())
+		return;
+
+	// Um painel por vez: cada grupo recolhivel tem a propria regua de lugares, e
+	// misturar as duas empilharia osso em cima de slider.
+	std::vector<HWND> hosts;
+	for (const AsymRow& row : g_rows) {
+		bool known = false;
+		for (HWND seen : hosts)
+			known = known || (seen == row.host);
+		if (!known)
+			hosts.push_back(row.host);
+	}
+	for (HWND host : hosts)
+		CompactHost(host);
+
+	ShrinkScrollRangeToContent();
+
+	if (g_redrawHeld) {
+		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
+		g_redrawHeld = false;
+	}
+	RedrawWindow(g_scroll, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
 }
 
 // Reserva a faixa da busca acima da lista, do mesmo jeito que a busca do Batch
@@ -592,6 +654,11 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 		return 0;
 	}
 
+	if (g_deferredGeometry && msg == g_deferredGeometry) {
+		ApplyFilteredGeometry();
+		return 0;
+	}
+
 	if (g_deferredAudit && msg == g_deferredAudit) {
 		AuditScrollContent();
 		return 0;
@@ -626,6 +693,9 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 		case WM_NCDESTROY:
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
+			g_redrawHeld = false;
+			g_auditHost = nullptr;
+			g_auditWrapper = nullptr;
 			g_dialog = nullptr;
 			g_scroll = nullptr;
 			g_edit = nullptr;

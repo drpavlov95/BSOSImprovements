@@ -6,6 +6,7 @@
 
 #include "core/host.h"
 #include "core/log.h"
+#include "core/theme.h"
 #include "features/pose_panel.h"
 #include "features/zero_sliders.h" // PickSliderHost
 #include "win32/menu_toggle.h"
@@ -21,7 +22,7 @@ namespace {
 // o lapis e a caixa junto; entre a caixa e o nome so o nome e a barra andam, e
 // os dois botoes que ja existiam ficam exatamente onde o usuario aprendeu a
 // procura-los.
-const int kGripWidth = 16;
+const int kGripWidth = 14;
 const int kGripId = 0xBF03;
 const UINT_PTR kGripSubclassId = 0xB515;
 const UINT_PTR kHostSubclassId = 0xB516;
@@ -59,6 +60,7 @@ DWORD g_lastCheck = 0;
 bool g_recheckPending = false;
 
 bool g_gripsOn = true;
+bool g_dark = false;
 
 // O arrasto em curso.
 struct Drag {
@@ -191,12 +193,41 @@ std::vector<HWND> WindowsOf(const std::vector<Row>& rows) {
 	return out;
 }
 
-void BeginDrag(HWND row);
+bool BeginDrag(HWND row);
 void DragToCursor();
 void FinishDrag(bool cancelled);
 void RefreshRows();
 
-// Desenha os seis pontos da alca.
+// Se o ponteiro esta em cima desta alca.
+//
+// Guardado na propria janela, e nao num global: sao mais de cem alcas na tela e
+// o realce e de UMA. Um global faria a lista inteira acender junto.
+bool GripIsHot(HWND grip) {
+	return GetWindowLongPtrW(grip, GWLP_USERDATA) != 0;
+}
+
+// Manda repintar a alca, e a faixa do PAI debaixo dela.
+//
+// As duas, porque a alca e WS_EX_TRANSPARENT: ela nao tem fundo proprio, entao
+// quem apaga o desenho velho e a linha. Invalidar so a alca deixaria os pontos
+// antigos por baixo dos novos.
+void RepaintGrip(HWND grip) {
+	HWND row = GetParent(grip);
+	if (!row)
+		return;
+	const RECT rc = RectIn(grip, row);
+	InvalidateRect(row, &rc, TRUE);
+	InvalidateRect(grip, nullptr, FALSE);
+}
+
+void SetGripHot(HWND grip, bool hot) {
+	if (GripIsHot(grip) == hot)
+		return;
+	SetWindowLongPtrW(grip, GWLP_USERDATA, hot ? 1 : 0);
+	RepaintGrip(grip);
+}
+
+// Desenha os seis pontos da alca, e nada mais.
 //
 // Desenhados, e nao um caractere numa fonte. A versao anterior punha o simbolo
 // "identico a" num Static, e o diagnostico provou que ele ficava na posicao
@@ -204,25 +235,29 @@ void RefreshRows();
 // dela e de como o controle o alinha. Seis retangulos nao dependem de nada
 // disso.
 //
-// A cor sai do PAI, perguntada por WM_CTLCOLORSTATIC, que e como um Static comum
-// se pinta. Assim a alca acompanha o tema claro ou escuro sozinha.
+// E sem fundo NENHUM. A versao anterior pedia o pincel ao pai por
+// WM_CTLCOLORSTATIC, supondo que um painel do wx respondesse como um Static
+// comum -- e o que voltava era o branco do DefWindowProc. Na tela isso virou um
+// quadradinho branco no meio de uma linha escura. A alca e WS_EX_TRANSPARENT: o
+// pai pinta o fundo dele por baixo, e aqui so ficam os pontos.
 void PaintGrip(HWND grip, HDC dc) {
 	RECT rc = {};
 	GetClientRect(grip, &rc);
 
-	HBRUSH background = reinterpret_cast<HBRUSH>(
-		SendMessageW(GetParent(grip), WM_CTLCOLORSTATIC, reinterpret_cast<WPARAM>(dc),
-					 reinterpret_cast<LPARAM>(grip)));
-	if (background)
-		FillRect(dc, &rc, background);
+	// Cinza parado, azul sob o ponteiro e durante o arrasto. Um cinza discreto
+	// e o que faz a alca ler como parte da tipografia da linha em vez de mais um
+	// controle; o azul e o que confirma que ela e clicavel.
+	const COLORREF tone = GripIsHot(grip)
+							  ? GetSysColor(COLOR_HIGHLIGHT)
+							  : (g_dark ? RGB(150, 150, 150) : GetSysColor(COLOR_GRAYTEXT));
 
-	HBRUSH ink = CreateSolidBrush(GetTextColor(dc));
+	HBRUSH ink = CreateSolidBrush(tone);
 	if (!ink)
 		return;
 
 	const int dot = 2;
-	const int gapX = 3;
-	const int gapY = 3;
+	const int gapX = 2;
+	const int gapY = 2;
 	const int width = dot * 2 + gapX;
 	const int height = dot * 3 + gapY * 2;
 	const int originX = (static_cast<int>(rc.right) - width) / 2;
@@ -265,18 +300,45 @@ LRESULT CALLBACK GripProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UIN
 			return 0;
 		}
 
+		// Seta vertical, e nao a de mover em quatro direcoes: a linha so anda
+		// para cima e para baixo. A de quatro pontas prometia um movimento
+		// lateral que nao existe.
 		case WM_SETCURSOR:
-			SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+			SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
 			return TRUE;
 
+		// So captura o mouse se o arrasto REALMENTE comecou.
+		//
+		// BeginDrag desiste em varios casos -- painel sumido, uma linha so, a
+		// linha nao encontrada -- e capturar antes de saber disso prendia o
+		// mouse para sempre: o WM_LBUTTONUP nao soltava, porque ele so solta
+		// quando ha um arrasto para encerrar.
 		case WM_LBUTTONDOWN:
-			SetCapture(hwnd);
-			BeginDrag(GetParent(hwnd));
+			SetGripHot(hwnd, true);
+			if (BeginDrag(GetParent(hwnd)))
+				SetCapture(hwnd);
 			return 0;
 
 		case WM_MOUSEMOVE:
-			if (g_drag.active)
+			if (g_drag.active) {
 				DragToCursor();
+				return 0;
+			}
+			if (!GripIsHot(hwnd)) {
+				SetGripHot(hwnd, true);
+				// Sem pedir o aviso de saida, a alca acenderia e nunca mais
+				// apagaria: WM_MOUSELEAVE nao chega sozinho.
+				TRACKMOUSEEVENT track = {};
+				track.cbSize = sizeof(track);
+				track.dwFlags = TME_LEAVE;
+				track.hwndTrack = hwnd;
+				TrackMouseEvent(&track);
+			}
+			return 0;
+
+		case WM_MOUSELEAVE:
+			if (!g_drag.active)
+				SetGripHot(hwnd, false);
 			return 0;
 
 		case WM_LBUTTONUP:
@@ -284,6 +346,7 @@ LRESULT CALLBACK GripProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UIN
 				FinishDrag(false);
 				ReleaseCapture();
 			}
+			SetGripHot(hwnd, false);
 			return 0;
 
 		// Perder a captura -- alt-tab, outra janela roubando -- encerra o
@@ -300,12 +363,16 @@ LRESULT CALLBACK GripProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UIN
 	return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-// O vao: uma moldura no lugar para onde a linha vai cair.
+// O vao: uma linha fina no lugar para onde a linha vai cair.
 //
 // Sem ele o arrasto e ambiguo. As outras linhas se acomodam e deixam um buraco,
 // mas um buraco no meio de uma lista de barras cinzentas nao se le como "e aqui
-// que ela entra" -- le-se como um erro de desenho. A moldura diz o que o buraco
-// significa.
+// que ela entra" -- le-se como um erro de desenho.
+//
+// Uma LINHA, e nao uma moldura do tamanho da linha. A moldura desenhava uma
+// caixa vazia onde vai entrar conteudo, o que parece ferramenta de depuracao; o
+// tracinho horizontal e o que as listas arrastaveis usam, e diz a mesma coisa
+// sem competir com o resto da tela.
 LRESULT CALLBACK SlotProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	switch (msg) {
 		case WM_NCDESTROY:
@@ -322,14 +389,16 @@ LRESULT CALLBACK SlotProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UIN
 				RECT rc = {};
 				GetClientRect(hwnd, &rc);
 
-				HBRUSH background = reinterpret_cast<HBRUSH>(
-					SendMessageW(GetParent(hwnd), WM_CTLCOLORSTATIC,
-								 reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(hwnd)));
-				if (background)
-					FillRect(dc, &rc, background);
+				// A janela continua ocupando a linha inteira -- e o espaco que a
+				// linha arrastada vai reocupar -- mas so o meio dela e pintado.
+				RECT line = rc;
+				line.top = rc.top + (rc.bottom - rc.top) / 2 - 1;
+				line.bottom = line.top + 2;
+				line.left += 5;
+				line.right -= 5;
 
 				if (HBRUSH edge = CreateSolidBrush(GetSysColor(COLOR_HIGHLIGHT))) {
-					FrameRect(dc, &rc, edge);
+					FillRect(dc, &line, edge);
 					DeleteObject(edge);
 				}
 			}
@@ -410,7 +479,11 @@ void AddGrip(HWND row) {
 	if (!parts.ok)
 		return;
 
-	HWND grip = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_NOTIFY,
+	// WS_EX_TRANSPARENT: o pai pinta o fundo por baixo, e a alca so poe os
+	// pontos em cima. E o que tira o quadradinho branco sem precisar adivinhar a
+	// cor de fundo da linha.
+	HWND grip = CreateWindowExW(WS_EX_TRANSPARENT, L"STATIC", L"",
+								WS_CHILD | WS_VISIBLE | SS_NOTIFY,
 								static_cast<int>(parts.nameRect.left),
 								static_cast<int>(parts.nameRect.top), kGripWidth,
 								static_cast<int>(parts.nameRect.bottom - parts.nameRect.top), row,
@@ -589,21 +662,29 @@ void ShowSlotAt(int index) {
 	if (!g_drag.slot || index < 0 || index >= static_cast<int>(g_drag.slotTops.size()))
 		return;
 
+	// Onde ele estava, para mandar o painel apagar aquele pedaco. Sem isto o
+	// tracinho deixaria rastro: a janela e transparente e nao tem fundo proprio
+	// para cobrir o desenho anterior.
+	const RECT before = RectIn(g_drag.slot, g_drag.host);
+
 	RECT client = {};
 	GetClientRect(g_drag.host, &client);
 	SetWindowPos(g_drag.slot, nullptr, 0, g_drag.slotTops[static_cast<size_t>(index)],
 				 static_cast<int>(client.right), g_drag.rowHeight,
 				 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+	InvalidateRect(g_drag.host, &before, TRUE);
+	InvalidateRect(g_drag.slot, nullptr, FALSE);
 }
 
-void BeginDrag(HWND row) {
+bool BeginDrag(HWND row) {
 	HWND host = GetParent(row);
 	if (!host)
-		return;
+		return false;
 
 	const std::vector<Row> rows = FindRows(host);
 	if (rows.size() < 2)
-		return;
+		return false;
 
 	int index = -1;
 	for (size_t i = 0; i < rows.size(); ++i) {
@@ -611,7 +692,7 @@ void BeginDrag(HWND row) {
 			index = static_cast<int>(i);
 	}
 	if (index < 0)
-		return;
+		return false;
 
 	const RECT rowRect = RectIn(row, host);
 
@@ -630,7 +711,8 @@ void BeginDrag(HWND row) {
 	ScreenToClient(host, &cursor);
 	g_drag.grabOffset = static_cast<int>(cursor.y) - g_drag.slotTops[static_cast<size_t>(index)];
 
-	g_drag.slot = CreateWindowExW(0, L"STATIC", L"", WS_CHILD, 0, 0, 0, 0, host, nullptr,
+	g_drag.slot = CreateWindowExW(WS_EX_TRANSPARENT, L"STATIC", L"", WS_CHILD, 0, 0, 0, 0, host,
+								  nullptr,
 								  reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(host, GWLP_HINSTANCE)),
 								  nullptr);
 	if (g_drag.slot) {
@@ -643,6 +725,7 @@ void BeginDrag(HWND row) {
 	SetWindowPos(row, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
 	LogF("reorder: peguei a linha %d de %d", index + 1, static_cast<int>(rows.size()));
+	return true;
 }
 
 void DragToCursor() {
@@ -786,6 +869,7 @@ bool Install(HWND frame) {
 	const PosePanel pose = FindPosePanel(frame);
 	g_posePanel = pose.ok ? pose.panel : nullptr;
 	g_gripsOn = Cfg().sliderDragHandles;
+	g_dark = DetectAppearance(AppDir()) == Appearance::Dark;
 
 	if (HMENU view = MenuToggle::FindMenu(frame, "menuView"))
 		MenuToggle::Add(frame, view, L"Slider drag handles", g_gripsOn, OnGripsToggled);
