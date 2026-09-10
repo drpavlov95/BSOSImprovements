@@ -319,6 +319,17 @@ void ShrinkScrollRangeToContent() {
 	GetClientRect(g_scroll, &client);
 	const int page = static_cast<int>(client.bottom - client.top);
 
+	// O que a rolagem estava fazendo ANTES de mexermos nela.
+	//
+	// E o unico ponto cego que sobrou nesta feature: o filtro esconde certo e
+	// as linhas compactam certo -- o log ja provou os dois -- mas se a barra
+	// nao acompanhar, o usuario continua olhando para um vazio. Uma linha por
+	// filtro diz se a faixa encolheu de verdade.
+	SCROLLINFO before = {};
+	before.cbSize = sizeof(before);
+	before.fMask = SIF_ALL;
+	GetScrollInfo(g_scroll, SB_VERT, &before);
+
 	SCROLLINFO info = {};
 	info.cbSize = sizeof(info);
 	info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
@@ -327,6 +338,14 @@ void ShrinkScrollRangeToContent() {
 	info.nPage = static_cast<UINT>(page > 0 ? page : 1);
 	info.nPos = 0;
 	SetScrollInfo(g_scroll, SB_VERT, &info, TRUE);
+
+	SCROLLINFO after = {};
+	after.cbSize = sizeof(after);
+	after.fMask = SIF_ALL;
+	GetScrollInfo(g_scroll, SB_VERT, &after);
+
+	LogF("symmetrize: rolagem -- conteudo ate %d, janela %d | antes pos=%d max=%d pag=%u | depois pos=%d max=%d pag=%u",
+		 bottom, page, before.nPos, before.nMax, before.nPage, after.nPos, after.nMax, after.nPage);
 }
 
 void RefreshRulers() {

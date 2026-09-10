@@ -82,25 +82,64 @@ HWND HandleOf(HWND row) {
 	return GetDlgItem(row, kHandleId);
 }
 
-// A fonte da alca, criada uma vez e compartilhada por todas as linhas.
+const UINT_PTR kHandleSubclassId = 0xB515;
+
+// Desenha os tres tracos da alca.
 //
-// Maior que a da linha de proposito: com a fonte do texto o simbolo sai um
-// risquinho no meio de um botao vazio. Com a altura do proprio botao, os tres
-// tracos ocupam a largura dele, que e o que se espera de uma alca de arrastar.
+// Desenhados, e nao um caractere numa fonte. A versao anterior punha o simbolo
+// "identico a" num Static e o diagnostico provou que ela ficava no lugar certo
+// -- (0,0) 20x22, colada no lapis em (20,0) -- e mesmo assim nada aparecia na
+// tela. Um glifo depende da fonte ter o caractere, do tamanho escolhido e de
+// como o controle o alinha; tres retangulos nao dependem de nada disso.
 //
-// A cor nao e escolhida aqui: um Static pega a cor do pai por WM_CTLCOLORSTATIC,
-// entao ela acompanha o tema claro ou escuro sem nada a mais.
-HFONT HandleFont(int size) {
-	static HFONT font = nullptr;
-	if (!font) {
-		LOGFONTW desc = {};
-		desc.lfHeight = -(size - 2);
-		desc.lfWeight = FW_NORMAL;
-		desc.lfCharSet = DEFAULT_CHARSET;
-		wcscpy_s(desc.lfFaceName, L"Segoe UI Symbol");
-		font = CreateFontIndirectW(&desc);
+// A cor sai do PAI, perguntando a ele por WM_CTLCOLORSTATIC, que e como um
+// Static normal se pinta. Assim o traco acompanha o tema claro ou escuro sem
+// nenhuma cor escrita aqui.
+LRESULT CALLBACK HandleSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_NCDESTROY)
+		RemoveWindowSubclass(hwnd, HandleSubclassProc, id);
+
+	if (msg != WM_PAINT)
+		return DefSubclassProc(hwnd, msg, wParam, lParam);
+
+	PAINTSTRUCT paint = {};
+	HDC dc = BeginPaint(hwnd, &paint);
+	if (!dc)
+		return 0;
+
+	RECT rc = {};
+	GetClientRect(hwnd, &rc);
+
+	HBRUSH background = reinterpret_cast<HBRUSH>(
+		SendMessageW(GetParent(hwnd), WM_CTLCOLORSTATIC,
+					 reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(hwnd)));
+	if (background)
+		FillRect(dc, &rc, background);
+
+	HBRUSH ink = CreateSolidBrush(GetTextColor(dc));
+	if (ink) {
+		const int width = static_cast<int>(rc.right - rc.left);
+		const int height = static_cast<int>(rc.bottom - rc.top);
+
+		const int barWidth = width - 8;
+		const int barHeight = 2;
+		const int gap = 4;
+		const int totalHeight = barHeight * 3 + gap * 2;
+		const int firstTop = (height - totalHeight) / 2;
+
+		for (int i = 0; i < 3 && barWidth > 0; ++i) {
+			RECT bar = {};
+			bar.left = rc.left + 4;
+			bar.right = bar.left + barWidth;
+			bar.top = rc.top + firstTop + i * (barHeight + gap);
+			bar.bottom = bar.top + barHeight;
+			FillRect(dc, &bar, ink);
+		}
+		DeleteObject(ink);
 	}
-	return font;
+
+	EndPaint(hwnd, &paint);
+	return 0;
 }
 
 // Poe a alca numa linha e empurra o resto para a direita.
@@ -198,7 +237,7 @@ void AddHandle(HWND row) {
 	if (!handle)
 		return;
 
-	SendMessageW(handle, WM_SETFONT, reinterpret_cast<WPARAM>(HandleFont(size)), TRUE);
+	SetWindowSubclass(handle, HandleSubclassProc, kHandleSubclassId, 0);
 
 	// A posicao da primeira, uma vez por sessao. Sem isto, "nao aparece" e
 	// "aparece no lugar errado" contam a mesma historia no log -- nenhuma.
