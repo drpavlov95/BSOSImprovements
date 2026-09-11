@@ -183,6 +183,29 @@ void CompactHost(HWND host) {
 	if (rows.empty())
 		return;
 
+	// Painel so de cabecalho nao se compacta -- e este era O defeito.
+	//
+	// As linhas dele sao "Position", "114 sliders" e "26 bones", que o filtro
+	// nunca esconde: nao ha buraco nenhum para fechar. So que ele e tambem o
+	// painel que ENVOLVE os dois grupos recolhiveis, e encolhe-lo pela ultima
+	// linha dele significa dimensiona-lo pela posicao do "26 bones" -- que mora
+	// embaixo do grupo de sliders e nao se mexeu.
+	//
+	// O log pegou os dois passos em seguida, na mesma tecla digitada:
+	//
+	//   encolher painel B0BA6 -- ultima linha em 239, quer 340, tem 1950
+	//   imediato -- envelope 340 (pedi 340)          <- funcionou
+	//   encolher painel B0BA6 -- ultima linha em 1946, quer 1950, tem 340
+	//   imediato -- envelope 1950 (pedi 1950)        <- e desfez
+	//
+	// Nao era o wx desfazendo o encolhimento. Era esta funcao, chamada uma
+	// segunda vez para o painel de cabecalho.
+	bool filterable = false;
+	for (const AsymRow* row : rows)
+		filterable = filterable || !row->fixed;
+	if (!filterable)
+		return;
+
 	std::sort(rows.begin(), rows.end(),
 			  [](const AsymRow* a, const AsymRow* b) { return a->top < b->top; });
 
@@ -249,29 +272,112 @@ void CompactHost(HWND host) {
 	ShrinkHostToFit(host, rows, placed);
 }
 
-// Encolhe o painel para caber so o que sobrou, e sobe o que vem depois dele.
+// Se `window` esta dentro de `ancestor`.
+bool IsUnder(HWND window, HWND ancestor) {
+	for (HWND walk = window; walk; walk = GetParent(walk)) {
+		if (walk == ancestor)
+			return true;
+	}
+	return false;
+}
+
+// O envelope de um painel de linhas: o ancestral mais alto que carrega SO ele.
 //
-// Compactar as linhas DENTRO do painel nao bastava: o painel continuava do
-// tamanho de antes, e sobrava um vazio enorme embaixo dos resultados, com a
-// secao seguinte empurrada para baixo dele.
+// Nao e o filho direto da area que rola, que era o que este arquivo supunha. O
+// log desfez a suposicao: a area que rola tem UM filho so, e dentro dele moram
+// as tres linhas de cabecalho E os dois grupos recolhiveis. Encolher esse filho
+// pelo tamanho de um dos grupos e encolher o todo pelo tamanho de uma parte --
+// e foi exatamente isso que fez a conta do "26 bones", que fica embaixo do grupo
+// de sliders, devolver o envelope ao tamanho cheio.
 //
-// O que muda de altura e o painel que e filho DIRETO da area que rola -- o
-// grupo recolhivel inteiro, e nao so a caixa interna onde as linhas moram.
-// Encolher a de dentro nao move nada na tela.
+// Subir ate onde o ancestral ainda carrega so este painel e o que distingue as
+// duas coisas, e nao depende de adivinhar qual janela o wx chama de quê.
+HWND EnvelopeOf(HWND host) {
+	HWND envelope = host;
+	while (true) {
+		HWND parent = GetParent(envelope);
+		if (!parent || parent == g_scroll)
+			break;
+
+		bool shared = false;
+		for (const AsymRow& row : g_rows) {
+			if (row.host != host && IsUnder(row.check, parent))
+				shared = true;
+		}
+		if (shared)
+			break;
+
+		envelope = parent;
+	}
+	return envelope;
+}
+
+// Encolheu um pedaco: acomoda o que vem depois dele, nivel por nivel.
+//
+// Cada degrau faz duas coisas. Os irmaos que vem DEPOIS sobem pelo mesmo tanto
+// -- depois na ordem vertical, e nao "abaixo do rodape", porque basta o wx por
+// uma borda para o proximo comecar um pixel antes do rodape e ficar parado em
+// cima de quem acabou de encolher. E o pai encolhe junto, senao o buraco so
+// muda de dono: sai de dentro do grupo e reaparece no fim da lista, que foi o
+// vazio que sobrou embaixo dos resultados.
+void PropagateShrink(HWND from, int delta) {
+	for (HWND node = from; node && node != g_scroll;) {
+		HWND parent = GetParent(node);
+		if (!parent)
+			return;
+
+		struct Sibling {
+			HWND window;
+			RECT rect;
+		};
+
+		std::vector<Sibling> siblings;
+		for (HWND child : ChildrenOf(parent)) {
+			Sibling entry = {};
+			entry.window = child;
+			entry.rect = RectInParent(child);
+			siblings.push_back(entry);
+		}
+		std::sort(siblings.begin(), siblings.end(),
+				  [](const Sibling& a, const Sibling& b) { return a.rect.top < b.rect.top; });
+
+		bool passed = false;
+		for (const Sibling& sibling : siblings) {
+			if (sibling.window == node) {
+				passed = true;
+				continue;
+			}
+			if (!passed)
+				continue;
+
+			SetWindowPos(sibling.window, nullptr, static_cast<int>(sibling.rect.left),
+						 static_cast<int>(sibling.rect.top) + delta, 0, 0,
+						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+
+		if (parent == g_scroll)
+			return;
+
+		RECT parentRect = {};
+		GetWindowRect(parent, &parentRect);
+		SetWindowPos(parent, nullptr, 0, 0, parentRect.right - parentRect.left,
+					 (parentRect.bottom - parentRect.top) + delta,
+					 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+		node = parent;
+	}
+}
+
+// Encolhe o grupo para caber so o que sobrou, e acomoda o resto da lista.
+//
+// Compactar as linhas DENTRO do painel nao basta: o painel continua do tamanho
+// de antes, e sobra um vazio enorme embaixo dos resultados com a secao seguinte
+// empurrada para baixo dele.
 void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed) {
 	if (!g_scroll || rows.empty())
 		return;
 
-	// Sobe do painel das linhas ate o filho direto da area que rola.
-	HWND wrapper = host;
-	while (wrapper && GetParent(wrapper) != g_scroll) {
-		HWND parent = GetParent(wrapper);
-		if (!parent || parent == g_scroll)
-			break;
-		wrapper = parent;
-	}
-	if (!wrapper || GetParent(wrapper) != g_scroll)
-		return; // o painel nao pendura na area que rola: nao mexe
+	HWND envelope = EnvelopeOf(host);
 
 	// Onde termina a ultima linha que sobrou.
 	int lastBottom = 0;
@@ -291,9 +397,9 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	if (!any)
 		lastBottom = 0;
 
-	RECT wrapperRect = {};
-	GetWindowRect(wrapper, &wrapperRect);
-	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&wrapperRect), 2);
+	RECT envelopeRect = {};
+	GetWindowRect(envelope, &envelopeRect);
+	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&envelopeRect), 2);
 
 	RECT hostRect = {};
 	GetWindowRect(host, &hostRect);
@@ -302,26 +408,21 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	// Onde o painel das linhas comeca DENTRO do envelope.
 	//
 	// O envelope carrega tambem o cabecalho do grupo -- o "Sliders" clicavel --
-	// acima do painel. Ignorar essa faixa foi o defeito: eu media a ultima
-	// linha em coordenadas do painel e aplicava o numero como altura do
+	// acima do painel. Ignorar essa faixa foi um defeito anterior: eu media a
+	// ultima linha em coordenadas do painel e aplicava o numero como altura do
 	// envelope, entao com poucos resultados o envelope ficava menor que o
-	// conteudo e cortava tudo. Era por isso que a lista sumia.
-	const int paneTop = static_cast<int>(hostRect.top - wrapperRect.top);
+	// conteudo e cortava tudo.
+	const int paneTop = static_cast<int>(hostRect.top - envelopeRect.top);
 	const int padding = 4;
 
 	const int paneHeight = lastBottom + padding;
 	const int wanted = paneTop + paneHeight;
-	const int current = wrapperRect.bottom - wrapperRect.top;
+	const int current = envelopeRect.bottom - envelopeRect.top;
 	const int delta = wanted - current;
 
-	// Os numeros do encolhimento, uma vez por filtro e por painel.
-	//
-	// O log ja provou que a rolagem passou a ser recalculada, e mesmo assim o
-	// conteudo media quase dois mil pixels com dezoito linhas a mostra. Ou seja:
-	// o painel nao esta encolhendo, e so estes quatro numeros dizem em qual
-	// conta isso se perde.
-	LogF("symmetrize: encolher painel %p -- ultima linha em %d, topo do painel %d, quer %d, tem %d",
-		 static_cast<void*>(wrapper), lastBottom, paneTop, wanted, current);
+	LogF("symmetrize: encolher grupo %p (painel %p) -- ultima linha em %d, topo do painel %d, quer %d, tem %d",
+		 static_cast<void*>(envelope), static_cast<void*>(host), lastBottom, paneTop, wanted,
+		 current);
 
 	if (delta == 0)
 		return;
@@ -330,63 +431,27 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	// nunca ficar menor que o que carrega.
 	SetWindowPos(host, nullptr, 0, 0, static_cast<int>(hostRect.right - hostRect.left),
 				 paneHeight, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(wrapper, nullptr, 0, 0, wrapperRect.right - wrapperRect.left, wanted,
+	SetWindowPos(envelope, nullptr, 0, 0, envelopeRect.right - envelopeRect.left, wanted,
 				 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+	PropagateShrink(envelope, delta);
 
 	// O que o Windows diz AGORA, antes de o wx ter chance de opinar.
 	RECT afterHost = {};
-	RECT afterWrapper = {};
+	RECT afterEnvelope = {};
 	GetWindowRect(host, &afterHost);
-	GetWindowRect(wrapper, &afterWrapper);
-	LogF("symmetrize: imediato -- painel %ld, envelope %ld (pedi %d)",
-		 afterHost.bottom - afterHost.top, afterWrapper.bottom - afterWrapper.top, wanted);
+	GetWindowRect(envelope, &afterEnvelope);
+	LogF("symmetrize: imediato -- painel %ld, grupo %ld (pedi %d)",
+		 afterHost.bottom - afterHost.top, afterEnvelope.bottom - afterEnvelope.top, wanted);
 
 	// E o que ele vai dizer depois que o wx terminar o que tiver para fazer.
 	g_auditHost = host;
-	g_auditWrapper = wrapper;
+	g_auditWrapper = envelope;
 	g_auditWanted = wanted;
 	if (!g_deferredAudit)
 		g_deferredAudit = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeAudit");
 	if (g_deferredAudit && g_dialog)
 		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
-
-	// E tudo que vem DEPOIS dele na lista sobe ou desce junto.
-	//
-	// Depois na ORDEM, e nao "abaixo do rodape do envelope". A versao anterior
-	// comparava o topo de cada irmao com wrapperRect.bottom, e bastava o wx pos
-	// uma borda ou um espacamento que fizesse o proximo grupo comecar um ou dois
-	// pixels antes desse rodape para ele ser dado como "acima" e ficar parado --
-	// sobrepondo o grupo que acabou de encolher. Ordenar os irmaos pelo topo e
-	// mover os que estao depois do envelope nao depende de nenhuma folga.
-	struct Sibling {
-		HWND window;
-		RECT rect;
-	};
-
-	std::vector<Sibling> siblings;
-	for (HWND child : ChildrenOf(g_scroll)) {
-		Sibling entry = {};
-		entry.window = child;
-		GetWindowRect(child, &entry.rect);
-		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&entry.rect), 2);
-		siblings.push_back(entry);
-	}
-	std::sort(siblings.begin(), siblings.end(),
-			  [](const Sibling& a, const Sibling& b) { return a.rect.top < b.rect.top; });
-
-	bool passedWrapper = false;
-	for (const Sibling& sibling : siblings) {
-		if (sibling.window == wrapper) {
-			passedWrapper = true;
-			continue;
-		}
-		if (!passedWrapper)
-			continue;
-
-		SetWindowPos(sibling.window, nullptr, static_cast<int>(sibling.rect.left),
-					 static_cast<int>(sibling.rect.top) + delta, 0, 0,
-					 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-	}
 }
 
 // Reaprende a regua enquanto a lista ainda esta inteira na tela.
@@ -705,7 +770,7 @@ void AuditScrollContent() {
 	RECT wrapperRect = {};
 	GetWindowRect(g_auditHost, &hostRect);
 	GetWindowRect(g_auditWrapper, &wrapperRect);
-	LogF("symmetrize: adiado -- painel %ld, envelope %ld (pedi %d)",
+	LogF("symmetrize: adiado -- painel %ld, grupo %ld (pedi %d)",
 		 hostRect.bottom - hostRect.top, wrapperRect.bottom - wrapperRect.top, g_auditWanted);
 
 	if (!g_scroll || !IsWindow(g_scroll))
