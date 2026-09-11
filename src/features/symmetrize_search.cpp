@@ -212,6 +212,29 @@ void CompactHost(HWND host) {
 	if (placed.size() != rows.size())
 		return;
 
+	// De onde saem os lugares deste painel.
+	//
+	// A tela mostra as linhas certas e compactadas entre si, mas cem pixels
+	// abaixo do cabecalho do grupo. Entao o defeito nao esta em QUAIS linhas
+	// ficam, e sim na origem da regua: ou `base` nao e o topo do painel, ou a
+	// regua guardada em row->top nao descreve mais este painel. So estes quatro
+	// numeros separam as duas coisas.
+	RECT hostInScroll = {};
+	GetWindowRect(host, &hostInScroll);
+	if (g_scroll)
+		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&hostInScroll), 2);
+
+	int firstVisible = -1;
+	for (size_t i = 0; i < rows.size(); ++i) {
+		if (rows[i]->visible) {
+			firstVisible = placed[i];
+			break;
+		}
+	}
+	LogF("symmetrize: painel %p em %ld..%ld da area -- base=%d regua comeca em %d, primeira linha vai para %d",
+		 static_cast<void*>(host), hostInScroll.top, hostInScroll.bottom, base, firstTop,
+		 firstVisible);
+
 	for (size_t i = 0; i < rows.size(); ++i) {
 		if (!rows[i]->visible)
 			continue;

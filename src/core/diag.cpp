@@ -43,10 +43,18 @@ void DumpBranch(HWND window, int depth, int& budget) {
 		GetWindowRect(child, &rc);
 
 		const std::wstring indent(static_cast<size_t>(depth) * 2, L' ');
-		LogF("  %ls%ls hwnd=%p id=%d %ldx%ld em (%ld,%ld) visivel=%d '%ls'",
+		// Duas visibilidades, e nao uma.
+		//
+		// `visivel` e a pergunta do Windows, que exige a arvore inteira acesa.
+		// `estilo` e o bit da PROPRIA janela, que e no que o resto do mod se
+		// apoia -- e as duas discordam neste programa o tempo todo. Reportar so
+		// a primeira ja quase me fez ler um viveiro de linhas escondidas como se
+		// fossem linhas de verdade.
+		LogF("  %ls%ls hwnd=%p id=%d %ldx%ld em (%ld,%ld) visivel=%d estilo=%d '%ls'",
 			 indent.c_str(), ClassOf(child).c_str(), static_cast<void*>(child),
 			 GetDlgCtrlID(child), rc.right - rc.left, rc.bottom - rc.top, rc.left, rc.top,
-			 IsWindowVisible(child) ? 1 : 0, TextOf(child).c_str());
+			 IsWindowVisible(child) ? 1 : 0, HasVisibleStyle(child) ? 1 : 0,
+			 TextOf(child).c_str());
 
 		DumpBranch(child, depth + 1, budget);
 	}
@@ -90,7 +98,7 @@ void DumpWindowTree(HWND root, const char* what) {
 		 static_cast<void*>(root), ClassOf(root).c_str(), rc.right - rc.left,
 		 rc.bottom - rc.top, TextOf(root).c_str());
 
-	int budget = 400;
+	int budget = 1500;
 	DumpBranch(root, 1, budget);
 	if (budget < 0)
 		LogF("dump: (cortado no teto de linhas)");
