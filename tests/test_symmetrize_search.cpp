@@ -182,3 +182,34 @@ TEST(FindsTheListAreaAmongTheDialogChildren) {
 	DestroyWindow(dlg);
 	return true;
 }
+
+TEST(TheListAreaIsTheDeepestWindowThatStillHoldsEveryRow) {
+	// A forma real do dialogo: a lista mora dentro de um wxStaticBox, e a
+	// moldura e a area que rola contam exatamente as mesmas linhas porque uma
+	// esta dentro da outra. Parar na moldura fazia tudo depois disso cair na
+	// janela errada -- inclusive redimensionar a area que rola inteira ate zero.
+	HWND dlg = MakeHost(nullptr, 0);
+	TEST_ASSERT(dlg != nullptr);
+
+	HWND box = MakeHost(dlg, 0);
+	HWND scroll = MakeHost(box, 0);
+	TEST_ASSERT(box != nullptr && scroll != nullptr);
+
+	AddRow(scroll, 0, L"Position", L"0.01", L"17");
+	AddRow(scroll, 30, L"114 sliders", L"0.02", L"42");
+
+	HWND collapse = MakeHost(scroll, 0);
+	TEST_ASSERT(collapse != nullptr);
+	for (int i = 0; i < 5; ++i)
+		AddRow(collapse, i * 30, L"Bone", L"0.0", L"0");
+
+	// A moldura e a area que rola empatam em sete caixas; ganha a de dentro.
+	TEST_ASSERT(FindAsymScroll(dlg) == scroll);
+
+	// E nao a de dentro DELA, que so tem cinco: mais fundo nao basta, tem que
+	// continuar carregando tudo.
+	TEST_ASSERT(FindAsymScroll(dlg) != collapse);
+
+	DestroyWindow(dlg);
+	return true;
+}

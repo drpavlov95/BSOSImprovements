@@ -29,6 +29,13 @@ HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 HWND g_dialog = nullptr;
 HWND g_scroll = nullptr;
+
+// A janela cujo topo a caixa de busca ocupa.
+//
+// Nao e a area que rola: a busca fica ACIMA da lista, na moldura do grupo.
+// Reservar a faixa dentro da area que rola significaria redimensionar a janela
+// que o wx usa para rolar -- e mexer nela e o que acabou de esvaziar o dialogo.
+HWND g_band = nullptr;
 HWND g_edit = nullptr;
 bool g_dark = false;
 UINT g_deferredLayout = 0;
@@ -143,17 +150,26 @@ std::wstring SearchText() {
 	return raw;
 }
 
-void CollectAllDescendants(HWND root, std::vector<HWND>& out, int depth) {
+// Uma janela da arvore, e a que distancia da raiz ela esta.
+//
+// A profundidade importa porque duas janelas encaixadas uma na outra contam as
+// MESMAS caixas de marcacao, e so ela desempata.
+struct Descendant {
+	HWND window = nullptr;
+	int depth = 0;
+};
+
+void CollectAllDescendants(HWND root, std::vector<Descendant>& out, int depth) {
 	if (depth > 8)
 		return;
 	for (HWND child : ChildrenOf(root)) {
-		out.push_back(child);
+		out.push_back({child, depth});
 		CollectAllDescendants(child, out, depth + 1);
 	}
 }
 
-std::vector<HWND> AllDescendants(HWND root) {
-	std::vector<HWND> out;
+std::vector<Descendant> AllDescendants(HWND root) {
+	std::vector<Descendant> out;
 	CollectAllDescendants(root, out, 0);
 	return out;
 }
@@ -722,7 +738,7 @@ int BandHeight(HWND dlg) {
 bool g_layouting = false;
 
 void ApplyLayout() {
-	if (!g_dialog || !g_edit || !g_scroll || !IsWindow(g_scroll))
+	if (!g_dialog || !g_edit || !g_band || !IsWindow(g_band))
 		return;
 
 	// Reposicionar a area que rola gera um WM_SIZE nela, que volta para ca. A
@@ -733,7 +749,7 @@ void ApplyLayout() {
 	g_layouting = true;
 
 	RECT sr = {};
-	GetWindowRect(g_scroll, &sr);
+	GetWindowRect(g_band, &sr);
 	MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&sr), 2);
 
 	// Idempotencia: sem ela, cada WM_SIZE encolheria a lista mais uma faixa, e
@@ -751,7 +767,7 @@ void ApplyLayout() {
 		return;
 	}
 
-	SetWindowPos(g_scroll, nullptr, sr.left, sr.top + band, width, height - band,
+	SetWindowPos(g_band, nullptr, sr.left, sr.top + band, width, height - band,
 				 SWP_NOZORDER | SWP_NOACTIVATE);
 
 	// A caixa vai para o TOPO da z-order, e nao fica onde nasceu.
@@ -885,6 +901,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			g_auditWrapper = nullptr;
 			g_dialog = nullptr;
 			g_scroll = nullptr;
+			g_band = nullptr;
 			g_edit = nullptr;
 			g_rows.clear();
 			SetRectEmpty(&g_appliedScrollRect);
@@ -942,6 +959,13 @@ void AddSearchBox(HWND dlg) {
 void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_dialog = dlg;
 	g_scroll = scroll;
+
+	// A moldura do grupo: o filho direto do dialogo que carrega a area que rola.
+	// E o topo DELA que a busca ocupa, sem tocar na janela que rola.
+	g_band = scroll;
+	while (g_band && GetParent(g_band) && GetParent(g_band) != dlg)
+		g_band = GetParent(g_band);
+
 	g_edit = nullptr;
 	g_rows.clear();
 	SetRectEmpty(&g_appliedScrollRect);
@@ -973,12 +997,15 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 		LogF("symmetrize: nenhuma linha encontrada, busca nao instalada");
 		g_dialog = nullptr;
 		g_scroll = nullptr;
+		g_band = nullptr;
 		return;
 	}
 
 	AddSearchBox(dlg);
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
+	if (g_band != scroll)
+		SetWindowSubclass(g_band, ScrollSubclassProc, kScrollSubclassId, 0);
 
 	// Cada painel de linhas e observado: e por ele que se sabe que um grupo
 	// recolhivel acabou de abrir, e que a geometria congelada dele precisa ser
@@ -996,6 +1023,8 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nunca somem)",
 		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()), fixedRows);
+	LogF("symmetrize: area que rola %p, moldura %p", static_cast<void*>(g_scroll),
+		 static_cast<void*>(g_band));
 
 	// A estrutura deste dialogo so existe enquanto ele esta aberto, e ele e
 	// modal. Despejar aqui e o unico jeito de olhar para ela sem depender de o
@@ -1179,34 +1208,43 @@ HWND FindAsymScroll(HWND dlg) {
 	if (!dlg)
 		return nullptr;
 
-	// A janela que ROLA, e nao simplesmente um filho do dialogo.
+	// A janela MAIS FUNDA que ainda carrega todas as caixas de marcacao.
 	//
-	// A versao anterior pegava o filho direto com mais caixas de marcacao, e
-	// isso podia cair na moldura do grupo em vez da area que rola de verdade
-	// -- e ai a faixa da busca era reservada na janela errada, cortando o
-	// topo da lista.
+	// Mais funda, e nao a primeira que aparecer com muitas. A lista mora dentro
+	// de um wxStaticBox -- o "Vertex Data Asymmetries" -- e a moldura e a area
+	// que rola contam exatamente as mesmas linhas, porque uma esta dentro da
+	// outra. Este era O defeito: a busca parava na moldura, e dali em diante
+	// tudo que este arquivo fazia caia na janela errada.
+	//
+	// O estrago aparecia longe da causa. A faixa de rolagem era escrita num
+	// wxStaticBox, que nao rola. O encolhimento tratava a area que rola inteira
+	// como se fosse um grupo e a redimensionava -- ate zera-la, levando a lista
+	// toda junto, cabecalhos inclusive. O log pegou o momento exato:
+	//
+	//   filho B154C [wxWindowNR] de 22 a 425   <- antes
+	//   filho B154C [wxWindowNR] de 22 a 22    <- depois
+	//
+	// Nao era o filtro escondendo as linhas fixas. Era a janela que as desenha
+	// com zero pixel de altura.
+	//
+	// A regra antiga preferia quem tivesse WS_VSCROLL, e isso parecia razoavel.
+	// So que o wx so poe a barra quando ela e necessaria: com os dois grupos
+	// recolhidos o conteudo cabe, a area que rola nao tem o estilo, e a busca
+	// caia na moldura de fora.
 	HWND best = nullptr;
 	int bestCount = 0;
+	int bestDepth = -1;
 
-	for (HWND candidate : AllDescendants(dlg)) {
-		if ((GetWindowLongW(candidate, GWL_STYLE) & WS_VSCROLL) == 0)
+	for (const Descendant& candidate : AllDescendants(dlg)) {
+		const int count = CountCheckBoxesUnder(candidate.window, 0);
+		if (count < bestCount)
 			continue;
-		const int count = CountCheckBoxesUnder(candidate, 0);
-		if (count > bestCount) {
-			bestCount = count;
-			best = candidate;
-		}
-	}
+		if (count == bestCount && candidate.depth <= bestDepth)
+			continue;
 
-	// Sem nenhuma que role, vale o antigo: melhor a moldura do que nada.
-	if (bestCount < 2) {
-		for (HWND child : ChildrenOf(dlg)) {
-			const int count = CountCheckBoxesUnder(child, 0);
-			if (count > bestCount) {
-				bestCount = count;
-				best = child;
-			}
-		}
+		bestCount = count;
+		bestDepth = candidate.depth;
+		best = candidate.window;
 	}
 
 	return bestCount >= 2 ? best : nullptr;
@@ -1258,6 +1296,7 @@ void Uninstall() {
 	g_frame = nullptr;
 	g_dialog = nullptr;
 	g_scroll = nullptr;
+	g_band = nullptr;
 	g_edit = nullptr;
 	g_expecting = false;
 	g_maskSymVertId = 0;
