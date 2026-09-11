@@ -18,65 +18,47 @@
 namespace {
 
 const int kIdSearch = 0xBF02;
+const int kIdResults = 0xBF04;
 const UINT_PTR kFrameSubclassId = 0xB50F;
 const UINT_PTR kPendingSubclassId = 0xB510;
 const UINT_PTR kDialogSubclassId = 0xB511;
 const UINT_PTR kEditSubclassId = 0xB512;
 const UINT_PTR kScrollSubclassId = 0xB513;
-const UINT_PTR kRowHostSubclassId = 0xB514;
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
 HWND g_dialog = nullptr;
+
+// A area que rola do dialogo -- o "asymScroll" do Actions.xrc.
+//
+// Nada e escrito nela. Ela serve para duas coisas: achar as linhas na abertura,
+// e dizer onde a lista de resultados deve ficar.
 HWND g_scroll = nullptr;
 
-// A janela cujo topo a caixa de busca ocupa.
+// A janela cujo topo a caixa de busca ocupa: a moldura do grupo.
 //
-// Nao e a area que rola: a busca fica ACIMA da lista, na moldura do grupo.
-// Reservar a faixa dentro da area que rola significaria redimensionar a janela
-// que o wx usa para rolar -- e mexer nela e o que acabou de esvaziar o dialogo.
+// Nao e a area que rola. Reservar a faixa dentro dela significaria redimensionar
+// a janela que o wx usa para rolar, e essa e justamente a que nao se toca.
 HWND g_band = nullptr;
+
 HWND g_edit = nullptr;
+
+// A lista de resultados, nossa, por cima da area original.
+HWND g_results = nullptr;
+
+// Verdadeiro enquanto SOMOS nos mexendo na lista de resultados.
+//
+// Preencher a lista dispara a mesma notificacao de um clique do usuario, e sem
+// esta trava marcar as caixas na montagem sairia clicando nas caixas de verdade
+// do programa -- ou seja, a busca mudaria o que vai ser simetrizado.
+bool g_syncing = false;
+
+// Para cada item da lista de resultados, de qual linha ele veio.
+std::vector<int> g_shown;
+
 bool g_dark = false;
 UINT g_deferredLayout = 0;
-
-// A verificacao do encolhimento, e o que fazer quando ele nao pega.
-//
-// Encolher um grupo e uma coisa; o wx deixar encolhido e outra. Digitando na
-// busca ele deixa -- o log mostrou as tres teclas seguidas aplicando e
-// sobrevivendo. Mas expandir ou recolher um grupo faz o wx refazer o layout DE
-// VERDADE, e ai ele desfaz: a medida adiada pegou os dois grupos de volta no
-// tamanho cheio, com o conteudo rolado para um Y negativo.
-//
-// Nao da para prever quando essa passagem do wx termina, entao a saida e medir
-// depois dela e reaplicar. Um numero fixo de tentativas, e nao ate acertar:
-// duas geometrias insistindo uma sobre a outra nunca param.
-UINT g_deferredAudit = 0;
-
-// O que cada grupo deveria medir depois da ultima passagem de geometria.
-struct WantedGroup {
-	HWND envelope = nullptr;
-	int height = 0;
-};
-
-std::vector<WantedGroup> g_wanted;
-int g_geometryRetries = 0;
-const int kMaxGeometryRetries = 3;
-UINT g_deferredGeometry = 0;
-bool g_redrawHeld = false;
-
-// Verdadeiro entre mudar a visibilidade e reacomodar a geometria.
-//
-// Nessa janela as linhas ja estao acesas e apagadas conforme a busca NOVA,
-// mas ainda paradas onde a busca ANTERIOR as deixou -- e as duas coisas juntas
-// parecem, para quem so olha `visible`, um layout natural. Aprender a regua ai
-// grava a posicao compactada POR NOS como se fosse a que o wx deu, e a partir
-// dai tudo que a regua explica sai um pouco mais errado a cada busca.
-//
-// Era esse o dialogo que ia ficando pior conforme se filtrava, limpava e
-// expandia: nao havia um erro grande, havia um erro que se acumulava.
-bool g_geometryStale = false;
-RECT g_appliedScrollRect = {};
+RECT g_appliedBandRect = {};
 std::vector<AsymRow> g_rows;
 
 // Ids dos dois comandos que abrem este dialogo. Sao a forma de reconhece-lo:
@@ -126,9 +108,9 @@ int CountCheckBoxesUnder(HWND root, int depth) {
 
 // Um painel que contem linhas, e a que profundidade ele esta.
 //
-// A profundidade e o que separa cabecalho de conteudo: as linhas fixas moram
-// direto na area que rola, e as de slider e de osso um nivel abaixo, cada
-// grupo dentro do seu painel recolhivel.
+// A profundidade e o que separa cabecalho de conteudo: as linhas de "Position"
+// e das contagens moram direto na area que rola, num wxFlexGridSizer, e as de
+// slider e de osso ficam mais fundo, cada grupo dentro do seu wxCollapsiblePane.
 struct RowHost {
 	HWND window = nullptr;
 	int depth = 0;
@@ -179,549 +161,161 @@ std::vector<Descendant> AllDescendants(HWND root) {
 	return out;
 }
 
-// Reposiciona as linhas de UM painel, fechando os buracos que o filtro abriu.
+// As tres colunas de uma linha, lidas da esquerda para a direita.
 //
-// A base -- o topo do primeiro lugar da lista -- e lida das posicoes ATUAIS, e
-// nao guardada da instalacao. Guardar daria errado no primeiro rolar: a lista
-// rola movendo os filhos, e as coordenadas de ontem apontariam para o lugar
-// errado. Como linha escondida nunca e movida, o menor topo do painel continua
-// sendo o do primeiro lugar, e da para reconstruir a regua a partir dele.
-void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed);
+// Da esquerda para a direita e nao por classe de controle: nas linhas de slider
+// e de osso o nome vem na propria caixa de marcacao, e nas de cabecalho vem num
+// texto ao lado dela. Ordenar por posicao acerta os dois casos sem precisar
+// saber qual e qual.
+struct RowText {
+	std::wstring name;
+	std::wstring average;
+	std::wstring count;
+};
 
-void CompactHost(HWND host) {
-	// Grupo recolhido nao se mexe -- nem por dentro.
-	//
-	// Este era o defeito que quebrava o dialogo. A versao anterior reposicionava
-	// os controles de dentro mesmo com o grupo fechado, e so DEPOIS desistia, no
-	// ShrinkHostToFit, por causa deste mesmo teste. Resultado: as linhas ficavam
-	// numa posicao compactada que ninguem via, o envelope continuava do tamanho
-	// antigo, e ao expandir o grupo aparecia aquilo -- cabecalho num lugar,
-	// linhas em outro, buracos no meio.
-	//
-	// E o wx nao conserta sozinho ao expandir: mostrar uma janela nao redimensiona
-	// nada, entao o sizer dele nao roda e as posicoes que escrevemos ficam. Ou
-	// seja, escrever com o grupo fechado e escrever para valer, so que as cegas.
-	//
-	// Com o grupo fechado nao ha nada a fazer: o filtro ja marcou quem casa e ja
-	// escondeu quem nao casa, e isso basta. A geometria e refeita quando ele
-	// abrir -- e o painel avisa, por WM_SHOWWINDOW.
-	if (!HasVisibleStyle(host))
-		return;
+RowText SplitRow(const AsymRow& row) {
+	struct Piece {
+		int left = 0;
+		std::wstring text;
+	};
 
-	std::vector<AsymRow*> rows;
-	for (AsymRow& row : g_rows) {
-		if (row.host == host)
-			rows.push_back(&row);
-	}
-	if (rows.empty())
-		return;
-
-	// Painel so de cabecalho nao se compacta -- e este era O defeito.
-	//
-	// As linhas dele sao "Position", "114 sliders" e "26 bones", que o filtro
-	// nunca esconde: nao ha buraco nenhum para fechar. So que ele e tambem o
-	// painel que ENVOLVE os dois grupos recolhiveis, e encolhe-lo pela ultima
-	// linha dele significa dimensiona-lo pela posicao do "26 bones" -- que mora
-	// embaixo do grupo de sliders e nao se mexeu.
-	//
-	// O log pegou os dois passos em seguida, na mesma tecla digitada:
-	//
-	//   encolher painel B0BA6 -- ultima linha em 239, quer 340, tem 1950
-	//   imediato -- envelope 340 (pedi 340)          <- funcionou
-	//   encolher painel B0BA6 -- ultima linha em 1946, quer 1950, tem 340
-	//   imediato -- envelope 1950 (pedi 1950)        <- e desfez
-	//
-	// Nao era o wx desfazendo o encolhimento. Era esta funcao, chamada uma
-	// segunda vez para o painel de cabecalho.
-	bool filterable = false;
-	for (const AsymRow* row : rows)
-		filterable = filterable || !row->fixed;
-	if (!filterable)
-		return;
-
-	std::sort(rows.begin(), rows.end(),
-			  [](const AsymRow* a, const AsymRow* b) { return a->top < b->top; });
-
-	int base = 0;
-	bool haveBase = false;
-	for (const AsymRow* row : rows) {
-		const RECT rc = RectInParent(row->check);
-		if (!haveBase || rc.top < base) {
-			base = static_cast<int>(rc.top);
-			haveBase = true;
-		}
-	}
-	if (!haveBase)
-		return;
-
-	std::vector<int> tops;
-	std::vector<bool> visible;
-	tops.reserve(rows.size());
-	visible.reserve(rows.size());
-	const int firstTop = rows.front()->top;
-	for (const AsymRow* row : rows) {
-		tops.push_back(base + (row->top - firstTop));
-		visible.push_back(row->visible);
-	}
-
-	const std::vector<int> placed = CompactRowTops(tops, visible);
-	if (placed.size() != rows.size())
-		return;
-
-	// De onde saem os lugares deste painel.
-	//
-	// A tela mostra as linhas certas e compactadas entre si, mas cem pixels
-	// abaixo do cabecalho do grupo. Entao o defeito nao esta em QUAIS linhas
-	// ficam, e sim na origem da regua: ou `base` nao e o topo do painel, ou a
-	// regua guardada em row->top nao descreve mais este painel. So estes quatro
-	// numeros separam as duas coisas.
-	RECT hostInScroll = {};
-	GetWindowRect(host, &hostInScroll);
-	if (g_scroll)
-		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&hostInScroll), 2);
-
-	int firstVisible = -1;
-	for (size_t i = 0; i < rows.size(); ++i) {
-		if (rows[i]->visible) {
-			firstVisible = placed[i];
-			break;
-		}
-	}
-	LogF("symmetrize: painel %p em %ld..%ld da area -- base=%d regua comeca em %d, primeira linha vai para %d",
-		 static_cast<void*>(host), hostInScroll.top, hostInScroll.bottom, base, firstTop,
-		 firstVisible);
-
-	for (size_t i = 0; i < rows.size(); ++i) {
-		if (!rows[i]->visible)
+	std::vector<Piece> pieces;
+	for (HWND cell : row.cells) {
+		std::wstring text = TextOf(cell);
+		if (text.empty())
 			continue;
-		for (const AsymCell& cell : rows[i]->cells) {
-			const RECT rc = RectInParent(cell.window);
-			SetWindowPos(cell.window, nullptr, static_cast<int>(rc.left),
-						 placed[i] + cell.offsetY, 0, 0,
-						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-		}
+		pieces.push_back({static_cast<int>(RectInParent(cell).left), std::move(text)});
 	}
+	std::sort(pieces.begin(), pieces.end(),
+			  [](const Piece& a, const Piece& b) { return a.left < b.left; });
 
-	ShrinkHostToFit(host, rows, placed);
+	RowText out;
+	if (pieces.size() > 0)
+		out.name = pieces[0].text;
+	if (pieces.size() > 1)
+		out.average = pieces[1].text;
+	if (pieces.size() > 2)
+		out.count = pieces[2].text;
+	return out;
 }
 
-// Se `window` esta dentro de `ancestor`.
-bool IsUnder(HWND window, HWND ancestor) {
-	for (HWND walk = window; walk; walk = GetParent(walk)) {
-		if (walk == ancestor)
-			return true;
-	}
-	return false;
-}
-
-// O envelope de um painel de linhas: o ancestral mais alto que carrega SO ele.
+// Poe a lista de resultados exatamente em cima da area original.
 //
-// Nao e o filho direto da area que rola, que era o que este arquivo supunha. O
-// log desfez a suposicao: a area que rola tem UM filho so, e dentro dele moram
-// as tres linhas de cabecalho E os dois grupos recolhiveis. Encolher esse filho
-// pelo tamanho de um dos grupos e encolher o todo pelo tamanho de uma parte --
-// e foi exatamente isso que fez a conta do "26 bones", que fica embaixo do grupo
-// de sliders, devolver o envelope ao tamanho cheio.
-//
-// Subir ate onde o ancestral ainda carrega so este painel e o que distingue as
-// duas coisas, e nao depende de adivinhar qual janela o wx chama de quê.
-HWND EnvelopeOf(HWND host) {
-	HWND envelope = host;
-	while (true) {
-		HWND parent = GetParent(envelope);
-		if (!parent || parent == g_scroll)
-			break;
-
-		bool shared = false;
-		for (const AsymRow& row : g_rows) {
-			if (row.host != host && IsUnder(row.check, parent))
-				shared = true;
-		}
-		if (shared)
-			break;
-
-		envelope = parent;
-	}
-	return envelope;
-}
-
-// Encolheu um pedaco: acomoda o que vem depois dele, nivel por nivel.
-//
-// Cada degrau faz duas coisas. Os irmaos que vem DEPOIS sobem pelo mesmo tanto
-// -- depois na ordem vertical, e nao "abaixo do rodape", porque basta o wx por
-// uma borda para o proximo comecar um pixel antes do rodape e ficar parado em
-// cima de quem acabou de encolher. E o pai encolhe junto, senao o buraco so
-// muda de dono: sai de dentro do grupo e reaparece no fim da lista, que foi o
-// vazio que sobrou embaixo dos resultados.
-void PropagateShrink(HWND from, int delta) {
-	for (HWND node = from; node && node != g_scroll;) {
-		HWND parent = GetParent(node);
-		if (!parent)
-			return;
-
-		struct Sibling {
-			HWND window;
-			RECT rect;
-		};
-
-		std::vector<Sibling> siblings;
-		for (HWND child : ChildrenOf(parent)) {
-			Sibling entry = {};
-			entry.window = child;
-			entry.rect = RectInParent(child);
-			siblings.push_back(entry);
-		}
-		std::sort(siblings.begin(), siblings.end(),
-				  [](const Sibling& a, const Sibling& b) { return a.rect.top < b.rect.top; });
-
-		bool passed = false;
-		for (const Sibling& sibling : siblings) {
-			if (sibling.window == node) {
-				passed = true;
-				continue;
-			}
-			if (!passed)
-				continue;
-
-			SetWindowPos(sibling.window, nullptr, static_cast<int>(sibling.rect.left),
-						 static_cast<int>(sibling.rect.top) + delta, 0, 0,
-						 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-		}
-
-		if (parent == g_scroll)
-			return;
-
-		RECT parentRect = {};
-		GetWindowRect(parent, &parentRect);
-		SetWindowPos(parent, nullptr, 0, 0, parentRect.right - parentRect.left,
-					 (parentRect.bottom - parentRect.top) + delta,
-					 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-		node = parent;
-	}
-}
-
-// Encolhe o grupo para caber so o que sobrou, e acomoda o resto da lista.
-//
-// Compactar as linhas DENTRO do painel nao basta: o painel continua do tamanho
-// de antes, e sobra um vazio enorme embaixo dos resultados com a secao seguinte
-// empurrada para baixo dele.
-void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed) {
-	if (!g_scroll || rows.empty())
+// Em cima, e nao no lugar: a original continua la embaixo, do tamanho que
+// sempre teve. Apagar a busca e so esconder esta.
+void LayoutResults() {
+	if (!g_results || !g_scroll || !g_dialog || !IsWindow(g_scroll))
 		return;
 
-	HWND envelope = EnvelopeOf(host);
+	RECT rc = {};
+	GetWindowRect(g_scroll, &rc);
+	MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&rc), 2);
 
-	// Onde termina a ultima linha que sobrou.
-	int lastBottom = 0;
-	bool any = false;
-	for (size_t i = 0; i < rows.size(); ++i) {
-		if (!rows[i]->visible)
-			continue;
-		RECT rc = {};
-		GetWindowRect(rows[i]->check, &rc);
-		const int height = static_cast<int>(rc.bottom - rc.top);
-		const int bottom = placed[i] + height;
-		if (!any || bottom > lastBottom) {
-			lastBottom = bottom;
-			any = true;
-		}
-	}
-	if (!any)
-		lastBottom = 0;
+	const int width = static_cast<int>(rc.right - rc.left);
+	SetWindowPos(g_results, HWND_TOP, static_cast<int>(rc.left), static_cast<int>(rc.top), width,
+				 static_cast<int>(rc.bottom - rc.top), SWP_NOACTIVATE);
 
-	RECT envelopeRect = {};
-	GetWindowRect(envelope, &envelopeRect);
-	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&envelopeRect), 2);
-
-	RECT hostRect = {};
-	GetWindowRect(host, &hostRect);
-	MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&hostRect), 2);
-
-	// Onde o painel das linhas comeca DENTRO do envelope.
-	//
-	// O envelope carrega tambem o cabecalho do grupo -- o "Sliders" clicavel --
-	// acima do painel. Ignorar essa faixa foi um defeito anterior: eu media a
-	// ultima linha em coordenadas do painel e aplicava o numero como altura do
-	// envelope, entao com poucos resultados o envelope ficava menor que o
-	// conteudo e cortava tudo.
-	const int paneTop = static_cast<int>(hostRect.top - envelopeRect.top);
-	const int padding = 4;
-
-	const int paneHeight = lastBottom + padding;
-	const int wanted = paneTop + paneHeight;
-	const int current = envelopeRect.bottom - envelopeRect.top;
-	const int delta = wanted - current;
-
-	LogF("symmetrize: encolher grupo %p (painel %p) -- ultima linha em %d, topo do painel %d, quer %d, tem %d",
-		 static_cast<void*>(envelope), static_cast<void*>(host), lastBottom, paneTop, wanted,
-		 current);
-
-	if (delta == 0)
-		return;
-
-	// O painel e o envelope, nessa ordem: o de dentro primeiro, para o de fora
-	// nunca ficar menor que o que carrega.
-	SetWindowPos(host, nullptr, 0, 0, static_cast<int>(hostRect.right - hostRect.left),
-				 paneHeight, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-	SetWindowPos(envelope, nullptr, 0, 0, envelopeRect.right - envelopeRect.left, wanted,
-				 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-	PropagateShrink(envelope, delta);
-
-	// O que o Windows diz AGORA, antes de o wx ter chance de opinar.
-	RECT afterHost = {};
-	RECT afterEnvelope = {};
-	GetWindowRect(host, &afterHost);
-	GetWindowRect(envelope, &afterEnvelope);
-	LogF("symmetrize: imediato -- painel %ld, grupo %ld (pedi %d)",
-		 afterHost.bottom - afterHost.top, afterEnvelope.bottom - afterEnvelope.top, wanted);
-
-	// Fica anotado o que este grupo deveria medir. Quem confere e a verificacao
-	// adiada, depois de o wx ter feito o que ia fazer.
-	g_wanted.push_back({envelope, wanted});
+	// Os numeros tem largura fixa e o nome fica com o resto, como na lista
+	// original: la a coluna do meio e a growablecol do wxFlexGridSizer.
+	const int average = 100;
+	const int count = 80;
+	const int name = width - average - count - GetSystemMetrics(SM_CXVSCROLL) - 8;
+	ListView_SetColumnWidth(g_results, 0, name > 120 ? name : 120);
+	ListView_SetColumnWidth(g_results, 1, average);
+	ListView_SetColumnWidth(g_results, 2, count);
 }
 
-// Reaprende a regua enquanto a lista ainda esta inteira na tela.
-//
-// A regua medida na instalacao envelhece. Os grupos "Sliders" e "Bones" comecam
-// RECOLHIDOS, entao as linhas de cabecalho foram medidas coladas umas nas
-// outras; ao expandir um grupo o programa afasta tudo, e a regua velha passava
-// a puxar "26 bones" para cima, em cima dos sliders -- foi isso que apareceu
-// empilhado na tela.
-//
-// Roda ANTES de esconder qualquer coisa: depois de esconder a tela ja nao e
-// mais a regua. Enquanto nada esta escondido, ela e.
-// Encolhe a faixa de rolagem ate o que sobrou de conteudo.
-//
-// Sem isto, filtrar deixa a lista curta mas a barra continua deixando rolar a
-// altura toda de antes -- e o que o usuario ve embaixo dos resultados nao e
-// espaco das linhas escondidas, e sim faixa de rolagem vazia. As linhas ja
-// foram compactadas; o que faltava era contar ao Windows que o conteudo
-// encolheu.
-void ShrinkScrollRangeToContent() {
-	if (!g_scroll || !IsWindow(g_scroll))
+// Refaz a lista de resultados a partir do que esta na caixa de busca.
+void RefreshResults() {
+	if (!g_results || !IsWindow(g_results))
 		return;
-
-	int bottom = 0;
-	for (HWND child : ChildrenOf(g_scroll)) {
-		if (!HasVisibleStyle(child))
-			continue;
-		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
-		if (rc.bottom > bottom)
-			bottom = static_cast<int>(rc.bottom);
-	}
-	if (bottom <= 0)
-		return;
-
-	RECT client = {};
-	GetClientRect(g_scroll, &client);
-	const int page = static_cast<int>(client.bottom - client.top);
-
-	// O que a rolagem estava fazendo ANTES de mexermos nela.
-	//
-	// E o unico ponto cego que sobrou nesta feature: o filtro esconde certo e
-	// as linhas compactam certo -- o log ja provou os dois -- mas se a barra
-	// nao acompanhar, o usuario continua olhando para um vazio. Uma linha por
-	// filtro diz se a faixa encolheu de verdade.
-	SCROLLINFO before = {};
-	before.cbSize = sizeof(before);
-	before.fMask = SIF_ALL;
-	GetScrollInfo(g_scroll, SB_VERT, &before);
-
-	SCROLLINFO info = {};
-	info.cbSize = sizeof(info);
-	info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-	info.nMin = 0;
-	info.nMax = bottom;
-	info.nPage = static_cast<UINT>(page > 0 ? page : 1);
-	info.nPos = 0;
-	SetScrollInfo(g_scroll, SB_VERT, &info, TRUE);
-
-	SCROLLINFO after = {};
-	after.cbSize = sizeof(after);
-	after.fMask = SIF_ALL;
-	GetScrollInfo(g_scroll, SB_VERT, &after);
-
-	LogF("symmetrize: rolagem -- conteudo ate %d, janela %d | antes pos=%d max=%d pag=%u | depois pos=%d max=%d pag=%u",
-		 bottom, page, before.nPos, before.nMax, before.nPage, after.nPos, after.nMax, after.nPage);
-}
-
-// Os paineis que tem linhas, sem repetir.
-std::vector<HWND> RowHosts() {
-	std::vector<HWND> hosts;
-	for (const AsymRow& row : g_rows) {
-		bool known = false;
-		for (HWND seen : hosts)
-			known = known || (seen == row.host);
-		if (!known)
-			hosts.push_back(row.host);
-	}
-	return hosts;
-}
-
-void RefreshRulers() {
-	// Por PAINEL, e nao pela lista inteira.
-	//
-	// A versao anterior varria todas as linhas e desistia na primeira escondida
-	// que encontrasse -- e as linhas dos dois grupos, sliders e ossos, moram na
-	// mesma lista. Bastava um osso filtrado para a regua dos sliders parar de
-	// aprender posicao nova para sempre, e dai vinha a linha aparecendo cem
-	// pixels abaixo do cabecalho depois de expandir ou recolher um grupo: a
-	// regua ainda era a de antes da mudanca.
-	// Enquanto a geometria esta em divida, nao ha regua a aprender.
-	//
-	// "Todas as linhas deste painel estao visiveis" NAO quer dizer "todas estao
-	// onde o wx as poe". Entre as duas coisas cabe exatamente a janela em que
-	// esta funcao gravava o nosso proprio trabalho como se fosse o do programa.
-	if (g_geometryStale)
-		return;
-
-	for (HWND host : RowHosts()) {
-		bool natural = true;
-		for (const AsymRow& row : g_rows) {
-			if (row.host == host && !row.visible)
-				natural = false;
-		}
-		if (!natural)
-			continue; // ja filtrado: as posicoes atuais nao sao as naturais
-
-		for (AsymRow& row : g_rows) {
-			if (row.host == host)
-				row.top = static_cast<int>(RectInParent(row.check).top);
-		}
-	}
-}
-
-// Pede a fase adiada de geometria.
-//
-// Adiada sempre, de todos os chamadores: o ponto e nunca mexer na geometria
-// enquanto o wx ainda esta mexendo nela.
-void ScheduleGeometryRefresh() {
-	if (!g_deferredGeometry)
-		g_deferredGeometry = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeGeometry");
-	if (g_deferredGeometry && g_dialog)
-		PostMessageW(g_dialog, g_deferredGeometry, 0, 0);
-}
-
-void ApplyFilter() {
-	if (g_rows.empty())
-		return;
-
-	RefreshRulers();
-
-	// Volta ao topo ANTES de medir qualquer coisa.
-	//
-	// Duas razoes. A lista rolada era o que deixava o usuario olhando para um
-	// vazio: os resultados estavam la em cima, fora da vista, e embaixo so
-	// sobrava faixa de rolagem. E a regua so faz sentido com o conteudo na
-	// origem -- rolar move os filhos, e medir no meio da rolagem daria
-	// posicoes que nao valem depois.
-	SendMessageW(g_scroll, WM_VSCROLL, MAKEWPARAM(SB_TOP, 0), 0);
 
 	const std::wstring query = SearchText();
-	int shown = 0;
-	int touched = 0;
 
-	// Sem redesenhar no meio: um projeto grande tem centenas de linhas, e deixar
-	// cada uma aparecer e sumir por conta propria faria a lista piscar a cada
-	// tecla digitada. Fica segurado ate a fase adiada devolver, mais abaixo.
-	if (!g_redrawHeld) {
-		SendMessageW(g_scroll, WM_SETREDRAW, FALSE, 0);
-		g_redrawHeld = true;
+	g_syncing = true;
+	ListView_DeleteAllItems(g_results);
+	g_shown.clear();
+
+	if (query.empty()) {
+		g_syncing = false;
+		ShowWindow(g_results, SW_HIDE);
+		LogF("symmetrize: busca vazia, a lista original volta a aparecer");
+		return;
 	}
 
-	for (AsymRow& row : g_rows) {
-		// Cabecalho fica, sempre. Sem isto, uma consulta que nao casasse com
-		// "Position" esvaziava o dialogo e ele parecia quebrado.
-		const bool visible = row.fixed || MatchesFilter(row.name, query);
-		if (visible)
-			++shown;
-
-		// So mexe no que mudou. Entre uma tecla e a seguinte a maioria das
-		// linhas continua no mesmo estado, e cada ShowWindow custa uma chamada
-		// ao sistema por controle.
-		if (visible == row.visible)
+	int item = 0;
+	for (size_t i = 0; i < g_rows.size(); ++i) {
+		const AsymRow& row = g_rows[i];
+		if (row.fixed || !MatchesFilter(row.name, query))
 			continue;
-		row.visible = visible;
-		++touched;
 
-		for (const AsymCell& cell : row.cells)
-			ShowWindow(cell.window, visible ? SW_SHOW : SW_HIDE);
+		const RowText text = SplitRow(row);
+
+		LVITEMW entry = {};
+		entry.mask = LVIF_TEXT;
+		entry.iItem = item;
+		entry.pszText = const_cast<wchar_t*>(text.name.c_str());
+		if (ListView_InsertItem(g_results, &entry) < 0)
+			continue;
+
+		ListView_SetItemText(g_results, item, 1, const_cast<wchar_t*>(text.average.c_str()));
+		ListView_SetItemText(g_results, item, 2, const_cast<wchar_t*>(text.count.c_str()));
+
+		// O resultado nasce com a marcacao que a caixa de verdade tem. Sem isto
+		// a busca pareceria desmarcar tudo o que o usuario ja tinha escolhido.
+		ListView_SetCheckState(g_results, item,
+							   SendMessageW(row.check, BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+		g_shown.push_back(static_cast<int>(i));
+		++item;
 	}
 
-	// A geometria fica para DEPOIS, numa mensagem adiada.
-	//
-	// Esconder uma linha faz o wx querer refazer o layout dela. Medir e mover
-	// no mesmo ciclo do ShowWindow e disputar a regua com ele enquanto ele ainda
-	// esta mexendo nela -- e quem escreve por ultimo ganha, que nunca somos nos.
-	// Adiado, o wx ja terminou tudo o que tinha para fazer e a geometria e
-	// aplicada por cima do resultado final dele.
-	//
-	// E a mesma licao do reorder de sliders, que so passou a funcionar quando
-	// parou de tentar prever o layout do wx e passou a corrigi-lo depois.
-	if (touched > 0) {
-		g_geometryStale = true;
-		g_geometryRetries = 0; // tecla nova, paciencia nova
-		ScheduleGeometryRefresh();
-	}
+	g_syncing = false;
 
-	// O desenho fica segurado ate la, senao a lista pisca uma vez sem compactar
-	// entre uma tecla e a proxima. Se nada mudou, nao ha fase adiada e ele volta
-	// agora mesmo.
-	if (touched == 0) {
-		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
-		g_redrawHeld = false;
-	}
+	LayoutResults();
+	ShowWindow(g_results, SW_SHOW);
 
-	LogF("symmetrize: filtro '%ls' -- %d de %d linhas visiveis, %d mudaram",
-		 query.c_str(), shown, static_cast<int>(g_rows.size()), touched);
+	LogF("symmetrize: busca '%ls' -- %d de %d linhas na lista de resultados", query.c_str(), item,
+		 static_cast<int>(g_rows.size()));
 }
 
-// A geometria do filtro, aplicada depois que o wx terminou a dele.
-//
-// Compacta as linhas, encolhe os paineis, empurra os grupos seguintes e
-// reescreve a faixa de rolagem -- as quatro coisas juntas, porque cada uma
-// depende do resultado da anterior.
-void ApplyFilteredGeometry() {
-	if (!g_scroll || !IsWindow(g_scroll) || g_rows.empty())
+// O usuario marcou ou desmarcou um resultado.
+void OnResultToggled(const NMLISTVIEW* info) {
+	// A notificacao vale para qualquer mudanca de estado do item -- selecao,
+	// foco, marcacao. So a marcacao interessa, e ela mora nos quatro bits altos
+	// do estado; zero ali quer dizer "nao foi a marcacao".
+	const UINT before = (info->uOldState & LVIS_STATEIMAGEMASK) >> 12;
+	const UINT after = (info->uNewState & LVIS_STATEIMAGEMASK) >> 12;
+	if (before == 0 || after == 0 || before == after)
 		return;
 
-	// A regua primeiro -- quando ha regua a aprender.
+	const int item = info->iItem;
+	if (item < 0 || item >= static_cast<int>(g_shown.size()))
+		return;
+
+	const int index = g_shown[static_cast<size_t>(item)];
+	if (index < 0 || index >= static_cast<int>(g_rows.size()))
+		return;
+
+	HWND check = g_rows[static_cast<size_t>(index)].check;
+	if (!check || !IsWindow(check))
+		return;
+
+	const bool wanted = (after == 2);
+	const bool current = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	if (wanted == current)
+		return;
+
+	// BM_CLICK, e nao BM_SETCHECK.
 	//
-	// Expandir um grupo muda as posicoes naturais dele, e compactar com a regua
-	// velha poria as linhas onde elas nao estao mais. Mas quando quem chamou foi
-	// o filtro, as linhas ainda estao onde a busca anterior as deixou, e ai nao
-	// ha nada de natural para aprender: e o proprio g_geometryStale que separa
-	// os dois casos.
-	RefreshRulers();
-
-	// Um painel por vez: cada grupo recolhivel tem a propria regua de lugares, e
-	// misturar as duas empilharia osso em cima de slider. Os recolhidos saem
-	// sozinhos, dentro de CompactHost.
-	g_wanted.clear();
-	for (HWND host : RowHosts())
-		CompactHost(host);
-
-	ShrinkScrollRangeToContent();
-
-	if (g_redrawHeld) {
-		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
-		g_redrawHeld = false;
-	}
-	RedrawWindow(g_scroll, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
-
-	// E so depois de o wx responder e que da para saber se pegou.
-	if (!g_deferredAudit)
-		g_deferredAudit = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeAudit");
-	if (g_deferredAudit && g_dialog)
-		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
+	// O programa so recalcula "Vertices that will be symmetrized" quando RECEBE
+	// o clique -- a conta esta no tratador dele, nao no controle. BM_SETCHECK
+	// mudaria o desenho da caixa e deixaria a conta parada, e o botao Symmetrize
+	// agiria sobre outra coisa do que a tela mostra.
+	SendMessageW(check, BM_CLICK, 0, 0);
 }
 
-// Reserva a faixa da busca acima da lista, do mesmo jeito que a busca do Batch
-// Build faz: o wx posiciona primeiro, e so entao a lista encolhe.
+// Reserva a faixa da busca acima da lista.
 int BandHeight(HWND dlg) {
 	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
 	HDC dc = GetDC(dlg);
@@ -742,59 +336,58 @@ int BandHeight(HWND dlg) {
 bool g_layouting = false;
 
 void ApplyLayout() {
-	if (!g_dialog || !g_edit || !g_band || !IsWindow(g_band))
+	if (!g_dialog || !g_edit)
 		return;
 
-	// Reposicionar a area que rola gera um WM_SIZE nela, que volta para ca. A
+	// Reposicionar a moldura gera um WM_SIZE nela, que volta para ca. A
 	// checagem de idempotencia abaixo ja cortaria a segunda volta, mas uma
 	// trava explicita torna isso obvio para quem le.
 	if (g_layouting)
 		return;
 	g_layouting = true;
 
-	RECT sr = {};
-	GetWindowRect(g_band, &sr);
-	MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&sr), 2);
+	if (g_band && IsWindow(g_band)) {
+		RECT sr = {};
+		GetWindowRect(g_band, &sr);
+		MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&sr), 2);
 
-	// Idempotencia: sem ela, cada WM_SIZE encolheria a lista mais uma faixa, e
-	// WM_SHOWWINDOW, WM_SIZE e a mensagem adiada chegam em sequencia.
-	if (EqualRect(&sr, &g_appliedScrollRect)) {
-		g_layouting = false;
-		return;
+		// Idempotencia: sem ela, cada WM_SIZE encolheria a moldura mais uma
+		// faixa, e WM_SHOWWINDOW, WM_SIZE e a mensagem adiada chegam em
+		// sequencia.
+		if (!EqualRect(&sr, &g_appliedBandRect)) {
+			const int band = BandHeight(g_dialog);
+			const int width = sr.right - sr.left;
+			const int height = sr.bottom - sr.top;
+			if (width > 20 && height > band * 2) {
+				SetWindowPos(g_band, nullptr, sr.left, sr.top + band, width, height - band,
+							 SWP_NOZORDER | SWP_NOACTIVATE);
+
+				// A caixa vai para o TOPO da z-order, e nao fica onde nasceu.
+				//
+				// Expandir um dos paineis recolhiveis faz o wx refazer o layout
+				// e repintar a moldura do grupo por cima dela -- foi assim que a
+				// busca simplesmente sumiu da tela depois de expandir "Bones".
+				//
+				// A largura tambem nao e a da lista inteira: ocupar tudo cobria
+				// o titulo "Vertex Data Asymmetries".
+				const int searchWidth = (width > 420) ? 360 : (width - 40);
+				SetWindowPos(g_edit, HWND_TOP, sr.right - searchWidth, sr.top + 1, searchWidth,
+							 band - 5, SWP_NOACTIVATE);
+
+				SetRect(&g_appliedBandRect, sr.left, sr.top + band, sr.right, sr.bottom);
+			}
+		}
 	}
 
-	const int band = BandHeight(g_dialog);
-	const int width = sr.right - sr.left;
-	const int height = sr.bottom - sr.top;
-	if (width <= 20 || height <= band * 2) {
-		g_layouting = false;
-		return;
-	}
-
-	SetWindowPos(g_band, nullptr, sr.left, sr.top + band, width, height - band,
-				 SWP_NOZORDER | SWP_NOACTIVATE);
-
-	// A caixa vai para o TOPO da z-order, e nao fica onde nasceu.
-	//
-	// Expandir um dos paineis recolhiveis faz o wx refazer o layout e
-	// repintar a moldura do grupo por cima dela -- foi assim que a busca
-	// simplesmente sumiu da tela depois de expandir "Bones".
-	//
-	// A largura tambem nao e a da lista inteira: ocupar tudo cobria o titulo
-	// "Vertex Data Asymmetries".
-	const int searchWidth = (width > 420) ? 360 : (width - 40);
-	SetWindowPos(g_edit, HWND_TOP, sr.right - searchWidth, sr.top + 1, searchWidth, band - 5,
-				 SWP_NOACTIVATE);
-
-	SetRect(&g_appliedScrollRect, sr.left, sr.top + band, sr.right, sr.bottom);
+	LayoutResults();
 	g_layouting = false;
 }
 
 // A area que rola tambem e observada, e nao so o dialogo.
 //
 // Expandir "Sliders" ou "Bones" refaz o layout DELA sem tocar no tamanho do
-// dialogo, entao o WM_SIZE do dialogo nunca chega e a faixa da busca nao era
-// reaplicada -- a lista voltava ao tamanho cheio e engolia a caixa.
+// dialogo, entao o WM_SIZE do dialogo nunca chega. A lista de resultados precisa
+// acompanhar, senao ela fica deslocada da area que cobre.
 LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	if (msg == WM_NCDESTROY)
 		RemoveWindowSubclass(hwnd, ScrollSubclassProc, id);
@@ -805,85 +398,9 @@ LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	return result;
 }
 
-// Confere se o encolhimento pegou, e reaplica se o wx o tiver desfeito.
-//
-// Medido AQUI e nao logo depois do SetWindowPos porque o desfazimento nao e
-// imediato: a medida tirada na hora deu o tamanho pedido nas duas vezes em que o
-// wx depois o devolveu ao tamanho cheio. So com a fila dele escoada da para
-// saber quem ganhou.
-//
-// Reaplicar algumas vezes e nao insistir para sempre: se o wx estiver realmente
-// decidido, duas geometrias se sobrescrevendo em laco travariam o dialogo em vez
-// de consertar coisa alguma. Depois do limite fica registrado que desistimos, e
-// o log diz qual grupo.
-void VerifyGeometry() {
-	int missed = 0;
-	for (const WantedGroup& group : g_wanted) {
-		if (!group.envelope || !IsWindow(group.envelope))
-			continue;
-
-		RECT rc = {};
-		GetWindowRect(group.envelope, &rc);
-		const int height = static_cast<int>(rc.bottom - rc.top);
-		if (height == group.height)
-			continue;
-
-		++missed;
-		LogF("symmetrize: o grupo %p voltou a medir %d, e eu tinha pedido %d",
-			 static_cast<void*>(group.envelope), height, group.height);
-	}
-
-	if (missed == 0) {
-		// A geometria voltou a descrever a visibilidade: a regua pode aprender
-		// de novo.
-		g_geometryStale = false;
-		g_geometryRetries = 0;
-		return;
-	}
-
-	if (g_geometryRetries >= kMaxGeometryRetries) {
-		LogF("symmetrize: %d grupos continuam fora do lugar depois de %d tentativas, parei de insistir",
-			 missed, g_geometryRetries);
-		g_geometryStale = false;
-		g_geometryRetries = 0;
-		return;
-	}
-
-	++g_geometryRetries;
-	ScheduleGeometryRefresh();
-}
-
-// Um grupo recolhivel avisando que abriu.
-//
-// E o gatilho que faltava. Enquanto o grupo esta fechado a geometria dele fica
-// congelada de proposito -- CompactHost recusa mexer -- e sem este aviso ela
-// continuaria congelada depois de aberto, porque abrir um grupo nao
-// redimensiona a area que rola e nenhuma das outras janelas observadas fica
-// sabendo. WM_SHOWWINDOW chega na PROPRIA janela que apareceu, que e
-// exatamente a que precisa ser recalculada.
-LRESULT CALLBACK RowHostSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
-	if (msg == WM_NCDESTROY)
-		RemoveWindowSubclass(hwnd, RowHostSubclassProc, id);
-
-	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
-	if (msg == WM_SHOWWINDOW && wParam)
-		ScheduleGeometryRefresh();
-	return result;
-}
-
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	if (g_deferredLayout && msg == g_deferredLayout) {
 		ApplyLayout();
-		return 0;
-	}
-
-	if (g_deferredGeometry && msg == g_deferredGeometry) {
-		ApplyFilteredGeometry();
-		return 0;
-	}
-
-	if (g_deferredAudit && msg == g_deferredAudit) {
-		VerifyGeometry();
 		return 0;
 	}
 
@@ -892,10 +409,21 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			// Compara o handle e nao so o id: se algum controle do dialogo
 			// tiver o mesmo id, comparar por id sozinho misturaria os dois.
 			if (HIWORD(wParam) == EN_CHANGE && reinterpret_cast<HWND>(lParam) == g_edit) {
-				ApplyFilter();
+				RefreshResults();
 				return 0;
 			}
 			break;
+
+		case WM_NOTIFY: {
+			auto* head = reinterpret_cast<NMHDR*>(lParam);
+			if (head && head->hwndFrom == g_results && head->code == LVN_ITEMCHANGED) {
+				auto* info = reinterpret_cast<NMLISTVIEW*>(lParam);
+				if (!g_syncing && info && (info->uChanged & LVIF_STATE))
+					OnResultToggled(info);
+				return 0;
+			}
+			break;
+		}
 
 		// So a NOSSA caixa. Os controles do dialogo sao do wx, que ja cuida do
 		// tema deles.
@@ -916,16 +444,15 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 		case WM_NCDESTROY:
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
-			g_redrawHeld = false;
-			g_geometryStale = false;
-			g_geometryRetries = 0;
-			g_wanted.clear();
 			g_dialog = nullptr;
 			g_scroll = nullptr;
 			g_band = nullptr;
 			g_edit = nullptr;
+			g_results = nullptr;
+			g_syncing = false;
+			g_shown.clear();
 			g_rows.clear();
-			SetRectEmpty(&g_appliedScrollRect);
+			SetRectEmpty(&g_appliedBandRect);
 			break;
 
 		default:
@@ -936,7 +463,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 // Enter na caixa de busca dispararia o botao padrao do dialogo, que aqui e
 // "Mask"/"Symmetrize" -- ou seja, executaria a operacao. Aqui ele nao faz nada:
-// o filtro ja e aplicado a cada tecla.
+// a lista de resultados ja e refeita a cada tecla.
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
 	if (msg == WM_GETDLGCODE) {
 		LRESULT code = DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -977,6 +504,55 @@ void AddSearchBox(HWND dlg) {
 	g_edit = edit;
 }
 
+void AddResultsList(HWND dlg) {
+	INITCOMMONCONTROLSEX common = {};
+	common.dwSize = sizeof(common);
+	common.dwICC = ICC_LISTVIEW_CLASSES;
+	InitCommonControlsEx(&common);
+
+	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
+	HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
+
+	// Nasce escondida: sem busca, quem aparece e a lista do programa.
+	HWND list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+								WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
+									LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+								0, 0, 10, 10, dlg,
+								reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdResults)), inst,
+								nullptr);
+	if (!list) {
+		LogF("symmetrize: nao consegui criar a lista de resultados (erro %lu)", GetLastError());
+		return;
+	}
+
+	ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT |
+												LVS_EX_DOUBLEBUFFER);
+	if (font)
+		SendMessageW(list, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+
+	// As mesmas tres colunas do cabecalho do dialogo, para a lista de resultados
+	// se parecer com a lista que ela cobre.
+	const wchar_t* titles[] = {L"Type", L"Average", L"Count"};
+	const int formats[] = {LVCFMT_LEFT, LVCFMT_RIGHT, LVCFMT_RIGHT};
+	for (int i = 0; i < 3; ++i) {
+		LVCOLUMNW column = {};
+		column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+		column.fmt = formats[i];
+		column.cx = 100;
+		column.pszText = const_cast<wchar_t*>(titles[i]);
+		ListView_InsertColumn(list, i, &column);
+	}
+
+	if (g_dark) {
+		ApplyDarkControlTheme(list, false);
+		ListView_SetBkColor(list, kDarkControlBackground);
+		ListView_SetTextBkColor(list, kDarkControlBackground);
+		ListView_SetTextColor(list, kDarkText);
+	}
+
+	g_results = list;
+}
+
 void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_dialog = dlg;
 	g_scroll = scroll;
@@ -988,16 +564,18 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 		g_band = GetParent(g_band);
 
 	g_edit = nullptr;
+	g_results = nullptr;
+	g_shown.clear();
 	g_rows.clear();
-	SetRectEmpty(&g_appliedScrollRect);
+	SetRectEmpty(&g_appliedBandRect);
 
-	// As linhas moram em mais de um painel: as fixas ficam direto na area que
-	// rola, e as de slider e de osso, cada uma dentro do seu painel recolhivel.
+	// As linhas moram em mais de um painel: as de cabecalho ficam direto na area
+	// que rola, num wxFlexGridSizer, e as de slider e de osso mais fundo, cada
+	// grupo dentro do seu wxCollapsiblePane.
 	std::vector<RowHost> hosts;
 	CollectRowHosts(scroll, hosts, 0);
 
-	// O painel mais raso e o do cabecalho. Tudo mais fundo e conteudo, e e so
-	// isso que o filtro esconde.
+	// O painel mais raso e o do cabecalho. Tudo mais fundo e conteudo.
 	int shallowest = 99;
 	for (const RowHost& host : hosts)
 		shallowest = (host.depth < shallowest) ? host.depth : shallowest;
@@ -1023,16 +601,11 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	}
 
 	AddSearchBox(dlg);
+	AddResultsList(dlg);
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
 	if (g_band != scroll)
 		SetWindowSubclass(g_band, ScrollSubclassProc, kScrollSubclassId, 0);
-
-	// Cada painel de linhas e observado: e por ele que se sabe que um grupo
-	// recolhivel acabou de abrir, e que a geometria congelada dele precisa ser
-	// refeita.
-	for (HWND host : RowHosts())
-		SetWindowSubclass(host, RowHostSubclassProc, kRowHostSubclassId, 0);
 
 	// O layout so vale depois que o dialogo estiver montado: aqui ainda
 	// estamos dentro do WM_WINDOWPOSCHANGING que o exibe, e o retangulo da
@@ -1042,10 +615,10 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	if (g_deferredLayout)
 		PostMessageW(dlg, g_deferredLayout, 0, 0);
 
-	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nunca somem)",
+	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nao entram nos resultados)",
 		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()), fixedRows);
-	LogF("symmetrize: area que rola %p, moldura %p", static_cast<void*>(g_scroll),
-		 static_cast<void*>(g_band));
+	LogF("symmetrize: area que rola %p, moldura %p, resultados %p", static_cast<void*>(g_scroll),
+		 static_cast<void*>(g_band), static_cast<void*>(g_results));
 
 	// A estrutura deste dialogo so existe enquanto ele esta aberto, e ele e
 	// modal. Despejar aqui e o unico jeito de olhar para ela sem depender de o
@@ -1168,7 +741,7 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 		row.check = anchor.window;
 		row.host = parent;
 		row.top = static_cast<int>(anchor.rect.top);
-		row.cells.push_back({anchor.window, 0});
+		row.cells.push_back(anchor.window);
 		row.name = anchor.text;
 
 		for (const Child& sibling : children) {
@@ -1187,8 +760,7 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 			if (center < anchor.rect.top || center > anchor.rect.bottom)
 				continue;
 
-			row.cells.push_back(
-				{sibling.window, static_cast<int>(sibling.rect.top - anchor.rect.top)});
+			row.cells.push_back(sibling.window);
 
 			if (!sibling.text.empty()) {
 				if (!row.name.empty())
@@ -1205,53 +777,23 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 	return rows;
 }
 
-std::vector<int> CompactRowTops(const std::vector<int>& tops, const std::vector<bool>& visible) {
-	std::vector<int> out;
-	if (tops.size() != visible.size())
-		return out;
-
-	out.reserve(tops.size());
-	size_t slot = 0;
-	for (size_t i = 0; i < tops.size(); ++i) {
-		if (!visible[i]) {
-			// Escondida fica onde estava. Move-la seria trabalho invisivel, e
-			// o topo dela e o que permite reconstruir a regua depois.
-			out.push_back(tops[i]);
-			continue;
-		}
-		out.push_back(tops[slot]);
-		++slot;
-	}
-	return out;
-}
-
 HWND FindAsymScroll(HWND dlg) {
 	if (!dlg)
 		return nullptr;
 
 	// A janela MAIS FUNDA que ainda carrega todas as caixas de marcacao.
 	//
-	// Mais funda, e nao a primeira que aparecer com muitas. A lista mora dentro
-	// de um wxStaticBox -- o "Vertex Data Asymmetries" -- e a moldura e a area
-	// que rola contam exatamente as mesmas linhas, porque uma esta dentro da
-	// outra. Este era O defeito: a busca parava na moldura, e dali em diante
-	// tudo que este arquivo fazia caia na janela errada.
+	// Mais funda, e nao a primeira que aparecer com muitas. O Actions.xrc poe a
+	// lista dentro de um wxStaticBoxSizer -- o "Vertex Data Asymmetries" -- e a
+	// moldura e a area que rola contam exatamente as mesmas linhas, porque uma
+	// esta dentro da outra. Parar na moldura fazia tudo depois disso cair na
+	// janela errada.
 	//
-	// O estrago aparecia longe da causa. A faixa de rolagem era escrita num
-	// wxStaticBox, que nao rola. O encolhimento tratava a area que rola inteira
-	// como se fosse um grupo e a redimensionava -- ate zera-la, levando a lista
-	// toda junto, cabecalhos inclusive. O log pegou o momento exato:
-	//
-	//   filho B154C [wxWindowNR] de 22 a 425   <- antes
-	//   filho B154C [wxWindowNR] de 22 a 22    <- depois
-	//
-	// Nao era o filtro escondendo as linhas fixas. Era a janela que as desenha
-	// com zero pixel de altura.
-	//
-	// A regra antiga preferia quem tivesse WS_VSCROLL, e isso parecia razoavel.
-	// So que o wx so poe a barra quando ela e necessaria: com os dois grupos
-	// recolhidos o conteudo cabe, a area que rola nao tem o estilo, e a busca
-	// caia na moldura de fora.
+	// A regra antiga preferia quem tivesse WS_VSCROLL, e isso parecia razoavel:
+	// o XRC declara <style>wxVSCROLL</style> no asymScroll. So que o wx so poe a
+	// barra quando ela e necessaria, e os dois grupos comecam recolhidos
+	// (<collapsed>1</collapsed>), entao o conteudo cabe e o estilo nao esta la
+	// na hora em que o dialogo abre.
 	HWND best = nullptr;
 	int bestCount = 0;
 	int bestDepth = -1;
@@ -1319,9 +861,12 @@ void Uninstall() {
 	g_scroll = nullptr;
 	g_band = nullptr;
 	g_edit = nullptr;
+	g_results = nullptr;
+	g_syncing = false;
 	g_expecting = false;
 	g_maskSymVertId = 0;
 	g_symVertId = 0;
+	g_shown.clear();
 	g_rows.clear();
 }
 
