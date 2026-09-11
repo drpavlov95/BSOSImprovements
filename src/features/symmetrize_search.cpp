@@ -31,8 +31,15 @@ HWND g_dialog = nullptr;
 
 // A area que rola do dialogo -- o "asymScroll" do Actions.xrc.
 //
-// Nada e escrito nela. Ela serve para duas coisas: achar as linhas na abertura,
-// e dizer onde a lista de resultados deve ficar.
+// Ela e ESCONDIDA assim que as linhas sao lidas, e nunca mais volta enquanto o
+// dialogo existir. Continua sendo o motor: as caixas de marcacao de verdade
+// moram nela, e e nelas que o clique do usuario acaba caindo. Mas quem o
+// usuario ve e a nossa lista, no lugar dela.
+//
+// Escondida, e nao coberta. Uma janela por cima de outra que continua ali e um
+// enxerto: as duas se pintam, a de baixo pode reaparecer por um quadro, e o
+// cabecalho "Type / Average / Count" dela ficaria atras do cabecalho da nossa.
+// Um ShowWindow resolve os tres de uma vez, e nao mexe em layout nenhum.
 HWND g_scroll = nullptr;
 
 // A janela cujo topo a caixa de busca ocupa: a moldura do grupo.
@@ -43,12 +50,11 @@ HWND g_band = nullptr;
 
 HWND g_edit = nullptr;
 
-// A lista, nossa, no lugar da original.
+// A lista do dialogo. A unica.
 //
-// Fica no lugar dela a janela inteira, e nao so enquanto se busca: uma lista
-// que aparece por cima e some de novo se anuncia como enxerto. Esta e a lista
-// do dialogo enquanto ele existir, com busca vazia ou nao, e a do programa fica
-// intacta debaixo dela -- sem nunca ser vista, e sem nunca ser tocada.
+// Ela ocupa o lugar que era da area que rola, e a original esta escondida --
+// entao nao ha nada por baixo nem por cima. Com busca vazia mostra tudo; digitar
+// so tira o que nao casa.
 HWND g_results = nullptr;
 
 // Verdadeiro enquanto SOMOS nos mexendo na lista de resultados.
@@ -204,12 +210,13 @@ RowText SplitRow(const AsymRow& row) {
 	return out;
 }
 
-// Poe a nossa lista exatamente onde a original esta.
+// Poe a nossa lista no lugar que era da original.
 //
-// Exatamente: o retangulo sai da propria janela original, entao a nossa ocupa a
-// mesma faixa que o wx reservou para ela, nem um pixel a mais. Sobrar para baixo
-// engoliria o "Vertices that will be symmetrized:", que mora fora da area que
-// rola e precisa continuar a vista -- e ele que diz o que o botao vai fazer.
+// O retangulo sai da propria janela escondida: ela mantem o tamanho que o wx lhe
+// deu, entao nossa lista ocupa exatamente a faixa reservada para a lista, nem um
+// pixel a mais. Sobrar para baixo engoliria o "Vertices that will be
+// symmetrized:", que mora fora dela e precisa continuar a vista -- e ele que diz
+// o que o botao vai fazer.
 void LayoutResults() {
 	if (!g_results || !g_scroll || !g_dialog || !IsWindow(g_scroll))
 		return;
@@ -338,6 +345,17 @@ void OnResultToggled(const NMLISTVIEW* info) {
 	// mudaria o desenho da caixa e deixaria a conta parada, e o botao Symmetrize
 	// agiria sobre outra coisa do que a tela mostra.
 	SendMessageW(check, BM_CLICK, 0, 0);
+
+	// A caixa esta ESCONDIDA junto com a lista original, e o clique precisa
+	// valer mesmo assim. Ler o estado de volta prova que valeu: se ele virou, o
+	// controle processou o clique, e quem processa manda o aviso ao dono -- que e
+	// onde o programa refaz a conta. Se um dia isto parar de virar, e aqui que
+	// aparece, e nao tres telas adiante.
+	const bool landed = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	if (landed != wanted) {
+		LogF("symmetrize: a caixa de '%ls' nao aceitou o clique -- continua %s",
+			 g_rows[static_cast<size_t>(index)].name.c_str(), landed ? "marcada" : "desmarcada");
+	}
 }
 
 // Reserva a faixa da busca acima da lista.
@@ -628,7 +646,13 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	AddSearchBox(dlg);
 	AddResultsList(dlg);
 
-	// Ja nasce cheia. A lista do programa nunca chega a ser vista.
+	// A original sai de cena aqui, antes de o dialogo aparecer pela primeira vez.
+	//
+	// As linhas ja foram lidas e as caixas de marcacao continuam existindo
+	// escondidas, que e tudo de que o programa precisa. O que sai e o desenho.
+	ShowWindow(scroll, SW_HIDE);
+
+	// E a nossa ja nasce cheia, entao o dialogo nunca e visto sem lista.
 	RefreshResults();
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
