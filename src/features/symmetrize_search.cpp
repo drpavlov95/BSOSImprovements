@@ -49,6 +49,18 @@ UINT g_deferredLayout = 0;
 UINT g_deferredAudit = 0;
 UINT g_deferredGeometry = 0;
 bool g_redrawHeld = false;
+
+// Verdadeiro entre mudar a visibilidade e reacomodar a geometria.
+//
+// Nessa janela as linhas ja estao acesas e apagadas conforme a busca NOVA,
+// mas ainda paradas onde a busca ANTERIOR as deixou -- e as duas coisas juntas
+// parecem, para quem so olha `visible`, um layout natural. Aprender a regua ai
+// grava a posicao compactada POR NOS como se fosse a que o wx deu, e a partir
+// dai tudo que a regua explica sai um pouco mais errado a cada busca.
+//
+// Era esse o dialogo que ia ficando pior conforme se filtrava, limpava e
+// expandia: nao havia um erro grande, havia um erro que se acumulava.
+bool g_geometryStale = false;
 HWND g_auditHost = nullptr;
 HWND g_auditWrapper = nullptr;
 int g_auditWanted = 0;
@@ -543,6 +555,14 @@ void RefreshRulers() {
 	// aprender posicao nova para sempre, e dai vinha a linha aparecendo cem
 	// pixels abaixo do cabecalho depois de expandir ou recolher um grupo: a
 	// regua ainda era a de antes da mudanca.
+	// Enquanto a geometria esta em divida, nao ha regua a aprender.
+	//
+	// "Todas as linhas deste painel estao visiveis" NAO quer dizer "todas estao
+	// onde o wx as poe". Entre as duas coisas cabe exatamente a janela em que
+	// esta funcao gravava o nosso proprio trabalho como se fosse o do programa.
+	if (g_geometryStale)
+		return;
+
 	for (HWND host : RowHosts()) {
 		bool natural = true;
 		for (const AsymRow& row : g_rows) {
@@ -626,8 +646,10 @@ void ApplyFilter() {
 	//
 	// E a mesma licao do reorder de sliders, que so passou a funcionar quando
 	// parou de tentar prever o layout do wx e passou a corrigi-lo depois.
-	if (touched > 0)
+	if (touched > 0) {
+		g_geometryStale = true;
 		ScheduleGeometryRefresh();
+	}
 
 	// O desenho fica segurado ate la, senao a lista pisca uma vez sem compactar
 	// entre uma tecla e a proxima. Se nada mudou, nao ha fase adiada e ele volta
@@ -650,9 +672,13 @@ void ApplyFilteredGeometry() {
 	if (!g_scroll || !IsWindow(g_scroll) || g_rows.empty())
 		return;
 
-	// A regua primeiro: expandir um grupo muda as posicoes naturais dele, e
-	// compactar com a regua velha poria as linhas onde elas nao estao mais.
-	// Painel filtrado e pulado la dentro, entao isto e seguro a qualquer hora.
+	// A regua primeiro -- quando ha regua a aprender.
+	//
+	// Expandir um grupo muda as posicoes naturais dele, e compactar com a regua
+	// velha poria as linhas onde elas nao estao mais. Mas quando quem chamou foi
+	// o filtro, as linhas ainda estao onde a busca anterior as deixou, e ai nao
+	// ha nada de natural para aprender: e o proprio g_geometryStale que separa
+	// os dois casos.
 	RefreshRulers();
 
 	// Um painel por vez: cada grupo recolhivel tem a propria regua de lugares, e
@@ -662,6 +688,10 @@ void ApplyFilteredGeometry() {
 		CompactHost(host);
 
 	ShrinkScrollRangeToContent();
+
+	// A geometria voltou a descrever a visibilidade: a regua pode aprender de
+	// novo.
+	g_geometryStale = false;
 
 	if (g_redrawHeld) {
 		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
@@ -850,6 +880,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 		case WM_NCDESTROY:
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
 			g_redrawHeld = false;
+			g_geometryStale = false;
 			g_auditHost = nullptr;
 			g_auditWrapper = nullptr;
 			g_dialog = nullptr;

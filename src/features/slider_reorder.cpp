@@ -1053,8 +1053,23 @@ void Uninstall() {
 	if (g_drag.active)
 		FinishDrag(true);
 
-	if (g_knownHost && IsWindow(g_knownHost))
+	// As alcas saem ANTES dos ponteiros.
+	//
+	// Cada alca e uma janela de verdade, com um subclass nosso, e o nome e a
+	// barra de cada linha estao deslocados por causa dela. Zerar os globais e ir
+	// embora deixava as duas coisas para tras: janelas vivas chamando codigo
+	// deste modulo, e linhas empurradas com uma folga que ja nao tem nada dentro
+	// para explicar por que.
+	//
+	// Passar por TODAS as linhas, e nao so pelas visiveis: uma linha escondida
+	// pelo filtro pode ter ganho a alca antes de sumir, e ela precisa voltar ao
+	// tamanho certo do mesmo jeito. O bit de visibilidade que importa e o da
+	// linha; os filhos dela mantem os deles, entao a medida continua valendo.
+	if (g_knownHost && IsWindow(g_knownHost)) {
+		for (HWND window : RowWindows(g_knownHost))
+			RemoveGrip(window);
 		RemoveWindowSubclass(g_knownHost, HostProc, kHostSubclassId);
+	}
 
 	g_frame = nullptr;
 	g_posePanel = nullptr;
