@@ -31,24 +31,23 @@ HWND g_dialog = nullptr;
 
 // A area que rola do dialogo -- o "asymScroll" do Actions.xrc.
 //
-// Ela e ESCONDIDA assim que as linhas sao lidas, e nunca mais volta enquanto o
-// dialogo existir. Continua sendo o motor: as caixas de marcacao de verdade
-// moram nela, e e nelas que o clique do usuario acaba caindo. Mas quem o
-// usuario ve e a nossa lista, no lugar dela.
+// Ela para de ser DESENHADA assim que as linhas sao lidas, e nao volta enquanto
+// o dialogo existir. Continua sendo o motor: as caixas de marcacao de verdade
+// moram nela, e e nelas que o clique do usuario acaba caindo. Mas quem o usuario
+// ve e a nossa lista, no lugar dela.
 //
-// Escondida, e nao coberta. Uma janela por cima de outra que continua ali e um
-// enxerto: as duas se pintam, a de baixo pode reaparecer por um quadro, e o
-// cabecalho "Type / Average / Count" dela ficaria atras do cabecalho da nossa.
-// Um ShowWindow resolve os tres de uma vez, e nao mexe em layout nenhum.
+// No lugar dela, e nao por cima: duas listas empilhadas se pintam as duas, a de
+// baixo reaparece por um quadro num redesenho, e o cabecalho "Type / Average /
+// Count" dela fica atras do cabecalho da nossa -- dois cabecalhos iguais, um
+// invisivel.
 HWND g_scroll = nullptr;
 
 HWND g_edit = nullptr;
 
-// A lista do dialogo. A unica.
+// A lista do dialogo. A unica que se ve.
 //
-// Ela ocupa o lugar que era da area que rola, e a original esta escondida --
-// entao nao ha nada por baixo nem por cima. Com busca vazia mostra tudo; digitar
-// so tira o que nao casa.
+// Ocupa o retangulo que era da area que rola, e essa nao se desenha mais. Com
+// busca vazia mostra tudo; digitar so tira o que nao casa.
 HWND g_results = nullptr;
 
 // Verdadeiro enquanto SOMOS nos mexendo na lista de resultados.
@@ -58,8 +57,22 @@ HWND g_results = nullptr;
 // do programa -- ou seja, a busca mudaria o que vai ser simetrizado.
 bool g_syncing = false;
 
-// Para cada item da lista de resultados, de qual linha ele veio.
+// As tres colunas de uma linha, ja separadas.
+struct RowText {
+	std::wstring name;
+	std::wstring average;
+	std::wstring count;
+};
+
+// Para cada item da lista, de qual linha ele veio.
 std::vector<int> g_shown;
+
+// O texto de cada linha, ja separado em colunas, na mesma ordem de g_rows.
+//
+// Calculado uma vez, na abertura. Separar as colunas custa quatro leituras de
+// texto e quatro de retangulo por linha, e refazer isso a cada tecla digitada
+// seriam mil e cem chamadas ao sistema por letra, com cento e quarenta linhas.
+std::vector<RowText> g_text;
 
 bool g_dark = false;
 UINT g_deferredLayout = 0;
@@ -165,18 +178,12 @@ std::vector<Descendant> AllDescendants(HWND root) {
 	return out;
 }
 
-// As tres colunas de uma linha, lidas da esquerda para a direita.
+// As tres colunas de uma linha, separadas pela posicao na tela.
 //
-// Da esquerda para a direita e nao por classe de controle: nas linhas de slider
-// e de osso o nome vem na propria caixa de marcacao, e nas de cabecalho vem num
-// texto ao lado dela. Ordenar por posicao acerta os dois casos sem precisar
-// saber qual e qual.
-struct RowText {
-	std::wstring name;
-	std::wstring average;
-	std::wstring count;
-};
-
+// Por posicao e nao por classe de controle: nas linhas de slider e de osso o
+// nome vem na propria caixa de marcacao, e nas de cabecalho vem num texto ao
+// lado dela. Ordenar pela coordenada acerta os dois casos sem precisar saber
+// qual e qual.
 RowText SplitRow(const AsymRow& row) {
 	struct Piece {
 		int left = 0;
@@ -193,13 +200,29 @@ RowText SplitRow(const AsymRow& row) {
 	std::sort(pieces.begin(), pieces.end(),
 			  [](const Piece& a, const Piece& b) { return a.left < b.left; });
 
+	// O nome vem da ESQUERDA, a contagem da DIREITA, e a media e o que sobra no
+	// meio.
+	//
+	// Contar da esquerda para a direita punha a contagem na coluna errada em tres
+	// linhas. O Actions.xrc explica: a linha do "x Sliders" e
+	//
+	//   checkAnySlider | anySliderLabel | spacer | anySliderText
+	//
+	// e o spacer nao tem texto. Sobravam duas pecas, a segunda virava "media", e
+	// o 7176 aparecia debaixo de Average em vez de Count -- justo nas linhas que
+	// ficam sempre no topo, onde mais se repara.
+	//
+	// Pela direita nao ha esse problema: a contagem e sempre a ultima coluna, em
+	// toda linha, com ou sem media.
 	RowText out;
-	if (pieces.size() > 0)
-		out.name = pieces[0].text;
+	if (pieces.empty())
+		return out;
+
+	out.name = pieces.front().text;
 	if (pieces.size() > 1)
-		out.average = pieces[1].text;
+		out.count = pieces.back().text;
 	if (pieces.size() > 2)
-		out.count = pieces[2].text;
+		out.average = pieces[pieces.size() - 2].text;
 	return out;
 }
 
@@ -231,9 +254,10 @@ int BandHeight(HWND dlg) {
 // pixels de layout do proprio dialogo andando, com um EDIT cru flutuando na
 // folga aberta. Era esse o aspecto de remendo, e ele era meu.
 //
-// A area da lista original e nossa para usar: ela esta escondida e nao vai
-// reclamar do que fizermos com o retangulo dela. A busca sai de dentro dele. O
-// dialogo fica com a geometria que o wx lhe deu, exatamente, para sempre.
+// O retangulo da lista original e nosso para usar: ela nao se desenha mais, e
+// ninguem mais le aquela area. A busca sai de dentro dele, com a lista logo
+// abaixo. O dialogo fica com a geometria que o wx lhe deu, exatamente, para
+// sempre.
 void LayoutOurControls() {
 	if (!g_dialog || !g_edit || !g_results || !g_scroll || !IsWindow(g_scroll))
 		return;
@@ -253,8 +277,10 @@ void LayoutOurControls() {
 		return;
 
 	const int band = BandHeight(g_dialog);
-	SetWindowPos(g_edit, HWND_TOP, left, top, width, band - 4, SWP_NOACTIVATE);
-	SetWindowPos(g_results, HWND_TOP, left, top + band, width, height - band, SWP_NOACTIVATE);
+	SetWindowPos(g_edit, HWND_TOP, left, top, width, band - 4,
+				 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	SetWindowPos(g_results, HWND_TOP, left, top + band, width, height - band,
+				 SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
 	// Os numeros tem largura fixa e o nome fica com o resto, como na lista
 	// original: la a coluna do meio e a growablecol do wxFlexGridSizer.
@@ -265,13 +291,21 @@ void LayoutOurControls() {
 	ListView_SetColumnWidth(g_results, 1, average);
 	ListView_SetColumnWidth(g_results, 2, count);
 
-	// Uma vez por retangulo novo. Se este numero mudar sozinho entre duas
-	// linhas do log, alguem ainda esta mexendo no layout do dialogo.
+	// Uma vez por retangulo novo.
+	//
+	// Duas coisas para conferir sem precisar de uma captura de tela. Se o topo
+	// mudar sozinho entre duas linhas, alguem ainda esta empurrando o layout do
+	// dialogo -- foi assim que os vinte e oito pixels apareceram. E se o rodape da
+	// lista chegar perto da altura do dialogo, ela esta comendo o "Vertices that
+	// will be symmetrized:" e os botoes.
 	static RECT logged = {};
 	if (!EqualRect(&rc, &logged)) {
 		logged = rc;
-		LogF("symmetrize: busca e lista de %d a %d, dentro da area que vai de %ld a %ld", top,
-			 top + height, rc.top, rc.bottom);
+		RECT client = {};
+		GetClientRect(g_dialog, &client);
+		LogF("symmetrize: busca em %d..%d, lista em %d..%d, e o dialogo tem %ld de altura",
+			 top, top + band - 4, top + band, top + height,
+			 client.bottom - client.top);
 	}
 }
 
@@ -291,17 +325,21 @@ void RefreshResults() {
 	g_shown.clear();
 
 	int item = 0;
-	for (size_t i = 0; i < g_rows.size(); ++i) {
+	for (size_t i = 0; i < g_rows.size() && i < g_text.size(); ++i) {
 		const AsymRow& row = g_rows[i];
+		const RowText& text = g_text[i];
 
 		// As linhas de cabecalho -- "Position", "111 sliders", "26 bones" --
 		// ficam sempre no topo. Elas marcam varias de uma vez, e some-las
 		// durante a busca tiraria do usuario justamente o atalho que ele usa
 		// depois de achar o grupo que queria.
-		if (!row.fixed && !MatchesFilter(row.name, query))
+		//
+		// A busca casa com o NOME, e nao com a linha inteira. AsymRow::name
+		// junta tudo o que esta na altura da caixa -- "PecsClavicle 0.000001
+		// 132" -- entao digitar "1" casava com quase todas por causa dos
+		// numeros, e digitar "0" casava com todas.
+		if (!row.fixed && !MatchesFilter(text.name, query))
 			continue;
-
-		const RowText text = SplitRow(row);
 
 		LVITEMW entry = {};
 		entry.mask = LVIF_TEXT;
@@ -326,7 +364,6 @@ void RefreshResults() {
 	g_syncing = false;
 
 	LayoutOurControls();
-	ShowWindow(g_results, SW_SHOW);
 	RedrawWindow(g_results, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
 
 	LogF("symmetrize: busca '%ls' -- %d de %d linhas na lista", query.c_str(), item,
@@ -447,6 +484,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			g_results = nullptr;
 			g_syncing = false;
 			g_shown.clear();
+			g_text.clear();
 			g_rows.clear();
 			break;
 
@@ -478,8 +516,14 @@ void AddSearchBox(HWND dlg) {
 	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
 	HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
 
+	// Nascem invisiveis, as duas.
+	//
+	// O retangulo so vale depois que o dialogo estiver montado, e ate la elas
+	// ficariam num canto com dez pixels de lado. Quem as mostra e o layout, ja no
+	// lugar certo -- entao nao ha um quadro com a busca no canto superior
+	// esquerdo da janela.
 	HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-								WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+								WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
 								0, 0, 10, 10, dlg,
 								reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdSearch)), inst, nullptr);
 	if (!edit) {
@@ -562,6 +606,7 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_edit = nullptr;
 	g_results = nullptr;
 	g_shown.clear();
+	g_text.clear();
 	g_rows.clear();
 
 	// As linhas moram em mais de um painel: as de cabecalho ficam direto na area
@@ -597,11 +642,44 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	AddSearchBox(dlg);
 	AddResultsList(dlg);
 
+	// As colunas de cada linha, separadas agora.
+	//
+	// Agora porque as posicoes ainda valem: e delas que sai qual texto e nome,
+	// qual e media e qual e contagem.
+	g_text.clear();
+	g_text.reserve(g_rows.size());
+	for (const AsymRow& row : g_rows)
+		g_text.push_back(SplitRow(row));
+
 	// A original sai de cena aqui, antes de o dialogo aparecer pela primeira vez.
 	//
-	// As linhas ja foram lidas e as caixas de marcacao continuam existindo
-	// escondidas, que e tudo de que o programa precisa. O que sai e o desenho.
-	ShowWindow(scroll, SW_HIDE);
+	// Por REGIAO VAZIA, e nao por ShowWindow.
+	//
+	// ShowWindow(SW_HIDE) e o obvio, e e uma armadilha. Nao da para saber, de
+	// fora, se o wx trata o WM_SHOWWINDOW que ele provoca e anota que a janela
+	// ficou escondida -- e se anotar, o sizer dele tira a area que rola do
+	// layout na proxima passagem. Ele roda uma ao mostrar o dialogo e outra a
+	// cada redimensionamento, e o resultado seria a moldura "Vertex Data
+	// Asymmetries" desabando sobre si mesma, levando junto o retangulo de onde a
+	// nossa lista tira o proprio.
+	//
+	// A regiao nao e uma propriedade que sizer nenhum consulte. Para o wx a
+	// janela continua visivel e do mesmo tamanho -- GetWindowRect devolve o
+	// retangulo inteiro, que e o que precisamos -- e para o usuario ela nao
+	// existe: a regiao recorta o desenho dela e o dos filhos junto.
+	//
+	// O ponto forte nao e que eu saiba o que o wx faz. E que assim nao preciso
+	// saber.
+	if (HRGN empty = CreateRectRgn(0, 0, 0, 0)) {
+		// A regiao passa a ser do sistema; apaga-la aqui a tiraria da janela.
+		SetWindowRgn(scroll, empty, TRUE);
+	}
+
+	// Registrado com classe e nome: apagar a janela errada apagaria a moldura
+	// inteira do grupo, e o log tem que dizer "asymScroll" -- se um dia disser
+	// outra coisa, o defeito esta em FindAsymScroll e nao aqui.
+	LogF("symmetrize: a area que rola %p [%ls] '%ls' saiu do desenho",
+		 static_cast<void*>(scroll), ClassOf(scroll).c_str(), TextOf(scroll).c_str());
 
 	// E a nossa ja nasce cheia, entao o dialogo nunca e visto sem lista.
 	RefreshResults();
@@ -867,6 +945,7 @@ void Uninstall() {
 	g_maskSymVertId = 0;
 	g_symVertId = 0;
 	g_shown.clear();
+	g_text.clear();
 	g_rows.clear();
 }
 
