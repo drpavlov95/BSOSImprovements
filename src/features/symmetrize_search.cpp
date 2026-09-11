@@ -40,20 +40,28 @@ HWND g_edit = nullptr;
 bool g_dark = false;
 UINT g_deferredLayout = 0;
 
-// A auditoria do encolhimento, medida duas vezes.
+// A verificacao do encolhimento, e o que fazer quando ele nao pega.
 //
-// Encolher o painel e uma coisa; o wx deixar encolhido e outra. O wx tem a
-// propria ideia do tamanho de cada painel -- o sizer e o best size dele -- e
-// esconder um controle por ShowWindow, que e o que o filtro faz, nao e o mesmo
-// que dizer ao wx que aquele controle saiu do layout. Entao e inteiramente
-// possivel que o SetWindowPos funcione e o wx o desfaca na proxima passagem de
-// layout, e nenhuma medida tirada na hora saberia disso.
+// Encolher um grupo e uma coisa; o wx deixar encolhido e outra. Digitando na
+// busca ele deixa -- o log mostrou as tres teclas seguidas aplicando e
+// sobrevivendo. Mas expandir ou recolher um grupo faz o wx refazer o layout DE
+// VERDADE, e ai ele desfaz: a medida adiada pegou os dois grupos de volta no
+// tamanho cheio, com o conteudo rolado para um Y negativo.
 //
-// Por isso duas: uma logo depois de mexer, outra por mensagem adiada, ja com a
-// fila do wx escoada. Se a primeira der o tamanho pedido e a segunda der o
-// antigo, quem desfaz e o wx, e a correcao tem que vir DEPOIS do layout dele em
-// vez de tentar preve-lo.
+// Nao da para prever quando essa passagem do wx termina, entao a saida e medir
+// depois dela e reaplicar. Um numero fixo de tentativas, e nao ate acertar:
+// duas geometrias insistindo uma sobre a outra nunca param.
 UINT g_deferredAudit = 0;
+
+// O que cada grupo deveria medir depois da ultima passagem de geometria.
+struct WantedGroup {
+	HWND envelope = nullptr;
+	int height = 0;
+};
+
+std::vector<WantedGroup> g_wanted;
+int g_geometryRetries = 0;
+const int kMaxGeometryRetries = 3;
 UINT g_deferredGeometry = 0;
 bool g_redrawHeld = false;
 
@@ -68,9 +76,6 @@ bool g_redrawHeld = false;
 // Era esse o dialogo que ia ficando pior conforme se filtrava, limpava e
 // expandia: nao havia um erro grande, havia um erro que se acumulava.
 bool g_geometryStale = false;
-HWND g_auditHost = nullptr;
-HWND g_auditWrapper = nullptr;
-int g_auditWanted = 0;
 RECT g_appliedScrollRect = {};
 std::vector<AsymRow> g_rows;
 
@@ -472,14 +477,9 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	LogF("symmetrize: imediato -- painel %ld, grupo %ld (pedi %d)",
 		 afterHost.bottom - afterHost.top, afterEnvelope.bottom - afterEnvelope.top, wanted);
 
-	// E o que ele vai dizer depois que o wx terminar o que tiver para fazer.
-	g_auditHost = host;
-	g_auditWrapper = envelope;
-	g_auditWanted = wanted;
-	if (!g_deferredAudit)
-		g_deferredAudit = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeAudit");
-	if (g_deferredAudit && g_dialog)
-		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
+	// Fica anotado o que este grupo deveria medir. Quem confere e a verificacao
+	// adiada, depois de o wx ter feito o que ia fazer.
+	g_wanted.push_back({envelope, wanted});
 }
 
 // Reaprende a regua enquanto a lista ainda esta inteira na tela.
@@ -664,6 +664,7 @@ void ApplyFilter() {
 	// parou de tentar prever o layout do wx e passou a corrigi-lo depois.
 	if (touched > 0) {
 		g_geometryStale = true;
+		g_geometryRetries = 0; // tecla nova, paciencia nova
 		ScheduleGeometryRefresh();
 	}
 
@@ -700,20 +701,23 @@ void ApplyFilteredGeometry() {
 	// Um painel por vez: cada grupo recolhivel tem a propria regua de lugares, e
 	// misturar as duas empilharia osso em cima de slider. Os recolhidos saem
 	// sozinhos, dentro de CompactHost.
+	g_wanted.clear();
 	for (HWND host : RowHosts())
 		CompactHost(host);
 
 	ShrinkScrollRangeToContent();
-
-	// A geometria voltou a descrever a visibilidade: a regua pode aprender de
-	// novo.
-	g_geometryStale = false;
 
 	if (g_redrawHeld) {
 		SendMessageW(g_scroll, WM_SETREDRAW, TRUE, 0);
 		g_redrawHeld = false;
 	}
 	RedrawWindow(g_scroll, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+
+	// E so depois de o wx responder e que da para saber se pegou.
+	if (!g_deferredAudit)
+		g_deferredAudit = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeAudit");
+	if (g_deferredAudit && g_dialog)
+		PostMessageW(g_dialog, g_deferredAudit, 0, 0);
 }
 
 // Reserva a faixa da busca acima da lista, do mesmo jeito que a busca do Batch
@@ -801,35 +805,52 @@ LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	return result;
 }
 
-// Mede de novo, com a fila do wx ja escoada, e lista o conteudo da area que
-// rola.
+// Confere se o encolhimento pegou, e reaplica se o wx o tiver desfeito.
 //
-// A lista dos filhos diretos existe porque a faixa de rolagem e calculada a
-// partir deles. Se algum deles continuar terminando la embaixo depois do
-// filtro, e ele que esta segurando o vazio -- e nao ha conta em
-// ShrinkHostToFit que resolva isso, porque o painel que ela encolhe nem e esse.
-void AuditScrollContent() {
-	if (!g_auditHost || !IsWindow(g_auditHost) || !g_auditWrapper || !IsWindow(g_auditWrapper))
-		return;
+// Medido AQUI e nao logo depois do SetWindowPos porque o desfazimento nao e
+// imediato: a medida tirada na hora deu o tamanho pedido nas duas vezes em que o
+// wx depois o devolveu ao tamanho cheio. So com a fila dele escoada da para
+// saber quem ganhou.
+//
+// Reaplicar algumas vezes e nao insistir para sempre: se o wx estiver realmente
+// decidido, duas geometrias se sobrescrevendo em laco travariam o dialogo em vez
+// de consertar coisa alguma. Depois do limite fica registrado que desistimos, e
+// o log diz qual grupo.
+void VerifyGeometry() {
+	int missed = 0;
+	for (const WantedGroup& group : g_wanted) {
+		if (!group.envelope || !IsWindow(group.envelope))
+			continue;
 
-	RECT hostRect = {};
-	RECT wrapperRect = {};
-	GetWindowRect(g_auditHost, &hostRect);
-	GetWindowRect(g_auditWrapper, &wrapperRect);
-	LogF("symmetrize: adiado -- painel %ld, grupo %ld (pedi %d)",
-		 hostRect.bottom - hostRect.top, wrapperRect.bottom - wrapperRect.top, g_auditWanted);
-
-	if (!g_scroll || !IsWindow(g_scroll))
-		return;
-
-	for (HWND child : ChildrenOf(g_scroll)) {
 		RECT rc = {};
-		GetWindowRect(child, &rc);
-		MapWindowPoints(nullptr, g_scroll, reinterpret_cast<POINT*>(&rc), 2);
-		LogF("symmetrize:   filho %p [%ls] de %ld a %ld, visivel=%d%s",
-			 static_cast<void*>(child), ClassOf(child).c_str(), rc.top, rc.bottom,
-			 HasVisibleStyle(child) ? 1 : 0, child == g_auditWrapper ? " <- o envelope" : "");
+		GetWindowRect(group.envelope, &rc);
+		const int height = static_cast<int>(rc.bottom - rc.top);
+		if (height == group.height)
+			continue;
+
+		++missed;
+		LogF("symmetrize: o grupo %p voltou a medir %d, e eu tinha pedido %d",
+			 static_cast<void*>(group.envelope), height, group.height);
 	}
+
+	if (missed == 0) {
+		// A geometria voltou a descrever a visibilidade: a regua pode aprender
+		// de novo.
+		g_geometryStale = false;
+		g_geometryRetries = 0;
+		return;
+	}
+
+	if (g_geometryRetries >= kMaxGeometryRetries) {
+		LogF("symmetrize: %d grupos continuam fora do lugar depois de %d tentativas, parei de insistir",
+			 missed, g_geometryRetries);
+		g_geometryStale = false;
+		g_geometryRetries = 0;
+		return;
+	}
+
+	++g_geometryRetries;
+	ScheduleGeometryRefresh();
 }
 
 // Um grupo recolhivel avisando que abriu.
@@ -862,7 +883,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	}
 
 	if (g_deferredAudit && msg == g_deferredAudit) {
-		AuditScrollContent();
+		VerifyGeometry();
 		return 0;
 	}
 
@@ -897,8 +918,8 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
 			g_redrawHeld = false;
 			g_geometryStale = false;
-			g_auditHost = nullptr;
-			g_auditWrapper = nullptr;
+			g_geometryRetries = 0;
+			g_wanted.clear();
 			g_dialog = nullptr;
 			g_scroll = nullptr;
 			g_band = nullptr;
