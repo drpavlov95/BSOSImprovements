@@ -42,12 +42,6 @@ HWND g_dialog = nullptr;
 // Um ShowWindow resolve os tres de uma vez, e nao mexe em layout nenhum.
 HWND g_scroll = nullptr;
 
-// A janela cujo topo a caixa de busca ocupa: a moldura do grupo.
-//
-// Nao e a area que rola. Reservar a faixa dentro dela significaria redimensionar
-// a janela que o wx usa para rolar, e essa e justamente a que nao se toca.
-HWND g_band = nullptr;
-
 HWND g_edit = nullptr;
 
 // A lista do dialogo. A unica.
@@ -69,7 +63,6 @@ std::vector<int> g_shown;
 
 bool g_dark = false;
 UINT g_deferredLayout = 0;
-RECT g_appliedBandRect = {};
 std::vector<AsymRow> g_rows;
 
 // Ids dos dois comandos que abrem este dialogo. Sao a forma de reconhece-lo:
@@ -210,38 +203,58 @@ RowText SplitRow(const AsymRow& row) {
 	return out;
 }
 
-// Poe a nossa lista no lugar que era da original.
+// Reserva a faixa da busca acima da lista.
+int BandHeight(HWND dlg) {
+	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
+	HDC dc = GetDC(dlg);
+	if (!dc)
+		return 26;
+
+	HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+	TEXTMETRICW tm = {};
+	GetTextMetricsW(dc, &tm);
+	if (old)
+		SelectObject(dc, old);
+	ReleaseDC(dlg, dc);
+
+	const int height = static_cast<int>(tm.tmHeight) + 12;
+	return height < 22 ? 22 : height;
+}
+
+// Poe a busca e a lista dentro da area que era da lista original.
 //
-// O retangulo sai da propria janela escondida: ela mantem o tamanho que o wx lhe
-// deu, entao nossa lista ocupa exatamente a faixa reservada para a lista, nem um
-// pixel a mais. Sobrar para baixo engoliria o "Vertices that will be
-// symmetrized:", que mora fora dela e precisa continuar a vista -- e ele que diz
-// o que o botao vai fazer.
-void LayoutResults() {
-	if (!g_results || !g_scroll || !g_dialog || !IsWindow(g_scroll))
+// DENTRO, e sem mover uma unica janela do programa.
+//
+// A versao anterior empurrava a moldura "Vertex Data Asymmetries" inteira para
+// baixo para abrir uma faixa onde por a caixa de busca. O log mediu o
+// deslocamento: a lista saia de 95..495 e ia para 123..523 -- vinte e oito
+// pixels de layout do proprio dialogo andando, com um EDIT cru flutuando na
+// folga aberta. Era esse o aspecto de remendo, e ele era meu.
+//
+// A area da lista original e nossa para usar: ela esta escondida e nao vai
+// reclamar do que fizermos com o retangulo dela. A busca sai de dentro dele. O
+// dialogo fica com a geometria que o wx lhe deu, exatamente, para sempre.
+void LayoutOurControls() {
+	if (!g_dialog || !g_edit || !g_results || !g_scroll || !IsWindow(g_scroll))
 		return;
 
 	RECT rc = {};
 	GetWindowRect(g_scroll, &rc);
 	MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&rc), 2);
 
+	const int left = static_cast<int>(rc.left);
+	const int top = static_cast<int>(rc.top);
 	const int width = static_cast<int>(rc.right - rc.left);
-	SetWindowPos(g_results, HWND_TOP, static_cast<int>(rc.left), static_cast<int>(rc.top), width,
-				 static_cast<int>(rc.bottom - rc.top), SWP_NOACTIVATE);
+	const int height = static_cast<int>(rc.bottom - rc.top);
 
-	// Uma vez por retangulo novo.
-	//
-	// A lista tem que cobrir a area que rola e parar onde ela para. O numero que
-	// importa e o rodape: se ele passar do topo do "Vertices that will be
-	// symmetrized:", a lista esta engolindo o rotulo que diz o que o botao faz.
-	static RECT logged = {};
-	if (!EqualRect(&rc, &logged)) {
-		logged = rc;
-		RECT client = {};
-		GetClientRect(g_dialog, &client);
-		LogF("symmetrize: a lista vai de %ld a %ld, e o dialogo tem %ld de altura", rc.top,
-			 rc.bottom, client.bottom - client.top);
-	}
+	// Antes de o dialogo estar montado o retangulo ainda e provisorio, e
+	// posicionar por ele poria a busca fora do lugar.
+	if (width < 80 || height < 80)
+		return;
+
+	const int band = BandHeight(g_dialog);
+	SetWindowPos(g_edit, HWND_TOP, left, top, width, band - 4, SWP_NOACTIVATE);
+	SetWindowPos(g_results, HWND_TOP, left, top + band, width, height - band, SWP_NOACTIVATE);
 
 	// Os numeros tem largura fixa e o nome fica com o resto, como na lista
 	// original: la a coluna do meio e a growablecol do wxFlexGridSizer.
@@ -251,6 +264,15 @@ void LayoutResults() {
 	ListView_SetColumnWidth(g_results, 0, name > 120 ? name : 120);
 	ListView_SetColumnWidth(g_results, 1, average);
 	ListView_SetColumnWidth(g_results, 2, count);
+
+	// Uma vez por retangulo novo. Se este numero mudar sozinho entre duas
+	// linhas do log, alguem ainda esta mexendo no layout do dialogo.
+	static RECT logged = {};
+	if (!EqualRect(&rc, &logged)) {
+		logged = rc;
+		LogF("symmetrize: busca e lista de %d a %d, dentro da area que vai de %ld a %ld", top,
+			 top + height, rc.top, rc.bottom);
+	}
 }
 
 // Refaz a lista a partir do que esta na caixa de busca.
@@ -303,7 +325,7 @@ void RefreshResults() {
 	SendMessageW(g_results, WM_SETREDRAW, TRUE, 0);
 	g_syncing = false;
 
-	LayoutResults();
+	LayoutOurControls();
 	ShowWindow(g_results, SW_SHOW);
 	RedrawWindow(g_results, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
 
@@ -358,92 +380,24 @@ void OnResultToggled(const NMLISTVIEW* info) {
 	}
 }
 
-// Reserva a faixa da busca acima da lista.
-int BandHeight(HWND dlg) {
-	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
-	HDC dc = GetDC(dlg);
-	if (!dc)
-		return 26;
-
-	HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
-	TEXTMETRICW tm = {};
-	GetTextMetricsW(dc, &tm);
-	if (old)
-		SelectObject(dc, old);
-	ReleaseDC(dlg, dc);
-
-	const int height = static_cast<int>(tm.tmHeight) + 12;
-	return height < 22 ? 22 : height;
-}
-
-bool g_layouting = false;
-
-void ApplyLayout() {
-	if (!g_dialog || !g_edit)
-		return;
-
-	// Reposicionar a moldura gera um WM_SIZE nela, que volta para ca. A
-	// checagem de idempotencia abaixo ja cortaria a segunda volta, mas uma
-	// trava explicita torna isso obvio para quem le.
-	if (g_layouting)
-		return;
-	g_layouting = true;
-
-	if (g_band && IsWindow(g_band)) {
-		RECT sr = {};
-		GetWindowRect(g_band, &sr);
-		MapWindowPoints(nullptr, g_dialog, reinterpret_cast<POINT*>(&sr), 2);
-
-		// Idempotencia: sem ela, cada WM_SIZE encolheria a moldura mais uma
-		// faixa, e WM_SHOWWINDOW, WM_SIZE e a mensagem adiada chegam em
-		// sequencia.
-		if (!EqualRect(&sr, &g_appliedBandRect)) {
-			const int band = BandHeight(g_dialog);
-			const int width = sr.right - sr.left;
-			const int height = sr.bottom - sr.top;
-			if (width > 20 && height > band * 2) {
-				SetWindowPos(g_band, nullptr, sr.left, sr.top + band, width, height - band,
-							 SWP_NOZORDER | SWP_NOACTIVATE);
-
-				// A caixa vai para o TOPO da z-order, e nao fica onde nasceu.
-				//
-				// Expandir um dos paineis recolhiveis faz o wx refazer o layout
-				// e repintar a moldura do grupo por cima dela -- foi assim que a
-				// busca simplesmente sumiu da tela depois de expandir "Bones".
-				//
-				// A largura tambem nao e a da lista inteira: ocupar tudo cobria
-				// o titulo "Vertex Data Asymmetries".
-				const int searchWidth = (width > 420) ? 360 : (width - 40);
-				SetWindowPos(g_edit, HWND_TOP, sr.right - searchWidth, sr.top + 1, searchWidth,
-							 band - 5, SWP_NOACTIVATE);
-
-				SetRect(&g_appliedBandRect, sr.left, sr.top + band, sr.right, sr.bottom);
-			}
-		}
-	}
-
-	LayoutResults();
-	g_layouting = false;
-}
-
 // A area que rola tambem e observada, e nao so o dialogo.
 //
-// Expandir "Sliders" ou "Bones" refaz o layout DELA sem tocar no tamanho do
-// dialogo, entao o WM_SIZE do dialogo nunca chega. A lista de resultados precisa
-// acompanhar, senao ela fica deslocada da area que cobre.
+// Ela esta escondida, mas continua sendo o wx quem lhe da tamanho: redimensionar
+// o dialogo faz o sizer refazer o layout dela, e e do retangulo dela que a busca
+// e a lista tiram o proprio. Sem observa-la, as duas ficariam onde estavam.
 LRESULT CALLBACK ScrollSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	if (msg == WM_NCDESTROY)
 		RemoveWindowSubclass(hwnd, ScrollSubclassProc, id);
 
 	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
 	if (msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED)
-		ApplyLayout();
+		LayoutOurControls();
 	return result;
 }
 
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	if (g_deferredLayout && msg == g_deferredLayout) {
-		ApplyLayout();
+		LayoutOurControls();
 		return 0;
 	}
 
@@ -481,7 +435,7 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 		case WM_SHOWWINDOW:
 		case WM_SIZE: {
 			LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
-			ApplyLayout();
+			LayoutOurControls();
 			return r;
 		}
 
@@ -489,13 +443,11 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
 			g_dialog = nullptr;
 			g_scroll = nullptr;
-			g_band = nullptr;
 			g_edit = nullptr;
 			g_results = nullptr;
 			g_syncing = false;
 			g_shown.clear();
 			g_rows.clear();
-			SetRectEmpty(&g_appliedBandRect);
 			break;
 
 		default:
@@ -556,10 +508,18 @@ void AddResultsList(HWND dlg) {
 	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
 	HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
 
-	// Nasce escondida: sem busca, quem aparece e a lista do programa.
-	HWND list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+	// A mesma borda da janela que ela substitui.
+	//
+	// Perguntada, e nao escolhida: se a area que rola tem moldura rebaixada, a
+	// nossa tem que ter tambem, senao o lugar onde havia um recorte no dialogo
+	// passa a ser uma mancha chapada. E se ela nao tem, por uma seria inventar
+	// uma borda que o dialogo nao tinha.
+	const DWORD edge = GetWindowLongW(g_scroll, GWL_EXSTYLE) & WS_EX_CLIENTEDGE;
+	const DWORD border = GetWindowLongW(g_scroll, GWL_STYLE) & WS_BORDER;
+
+	HWND list = CreateWindowExW(edge, WC_LISTVIEWW, L"",
 								WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
-									LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+									LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | border,
 								0, 0, 10, 10, dlg,
 								reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdResults)), inst,
 								nullptr);
@@ -599,18 +559,10 @@ void AddResultsList(HWND dlg) {
 void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_dialog = dlg;
 	g_scroll = scroll;
-
-	// A moldura do grupo: o filho direto do dialogo que carrega a area que rola.
-	// E o topo DELA que a busca ocupa, sem tocar na janela que rola.
-	g_band = scroll;
-	while (g_band && GetParent(g_band) && GetParent(g_band) != dlg)
-		g_band = GetParent(g_band);
-
 	g_edit = nullptr;
 	g_results = nullptr;
 	g_shown.clear();
 	g_rows.clear();
-	SetRectEmpty(&g_appliedBandRect);
 
 	// As linhas moram em mais de um painel: as de cabecalho ficam direto na area
 	// que rola, num wxFlexGridSizer, e as de slider e de osso mais fundo, cada
@@ -639,7 +591,6 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 		LogF("symmetrize: nenhuma linha encontrada, busca nao instalada");
 		g_dialog = nullptr;
 		g_scroll = nullptr;
-		g_band = nullptr;
 		return;
 	}
 
@@ -656,8 +607,6 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	RefreshResults();
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
-	if (g_band != scroll)
-		SetWindowSubclass(g_band, ScrollSubclassProc, kScrollSubclassId, 0);
 
 	// O layout so vale depois que o dialogo estiver montado: aqui ainda
 	// estamos dentro do WM_WINDOWPOSCHANGING que o exibe, e o retangulo da
@@ -669,8 +618,8 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	LogF("symmetrize: busca instalada, %d linhas em %d paineis (%d de cabecalho, que nao entram nos resultados)",
 		 static_cast<int>(g_rows.size()), static_cast<int>(hosts.size()), fixedRows);
-	LogF("symmetrize: area que rola %p, moldura %p, resultados %p", static_cast<void*>(g_scroll),
-		 static_cast<void*>(g_band), static_cast<void*>(g_results));
+	LogF("symmetrize: area que rola %p (escondida), lista %p", static_cast<void*>(g_scroll),
+		 static_cast<void*>(g_results));
 
 	// A estrutura deste dialogo so existe enquanto ele esta aberto, e ele e
 	// modal. Despejar aqui e o unico jeito de olhar para ela sem depender de o
@@ -911,7 +860,6 @@ void Uninstall() {
 	g_frame = nullptr;
 	g_dialog = nullptr;
 	g_scroll = nullptr;
-	g_band = nullptr;
 	g_edit = nullptr;
 	g_results = nullptr;
 	g_syncing = false;
