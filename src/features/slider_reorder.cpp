@@ -151,10 +151,10 @@ std::wstring NameOf(HWND row) {
 	return parts.ok ? TextOf(parts.name) : std::wstring();
 }
 
-// Os filhos diretos do painel que sao linha de slider, na ordem da z-order.
+// TODAS as linhas do painel, escondidas pelo filtro ou nao.
 //
-// Serve para RESPONDER "a lista mudou?": o que importa ai e o conjunto de
-// janelas, nao onde elas estao.
+// Serve para duas coisas que precisam do conjunto inteiro: reconstruir a ordem
+// completa por nome, e saber quais janelas existem.
 std::vector<HWND> RowWindows(HWND host) {
 	std::vector<HWND> out;
 	for (HWND child : ChildrenOf(host)) {
@@ -164,7 +164,31 @@ std::vector<HWND> RowWindows(HWND host) {
 	return out;
 }
 
-// As linhas de cima para baixo, com nome e altura.
+// So as linhas que estao de fato na tela agora.
+//
+// O Outfit Studio tem um filtro de sliders PROPRIO -- a caixa "Slider Filter"
+// no alto do painel -- e ele esconde linha por linha. Este mod nao sabia disso:
+// mexia em todas, inclusive nas escondidas, e reposicionava a lista inteira
+// usando as posicoes delas. Dai vinham as duas queixas: as linhas apareciam e
+// sumiam sem regra durante a busca, e entrar no modo de edicao com a busca ativa
+// levava tudo embora -- porque o modo de edicao dispara um relayout, o relayout
+// chamava RefreshRows, e RefreshRows reordenava as cento e tantas linhas por
+// cima do que o filtro tinha acabado de montar.
+//
+// A pergunta e feita a PROPRIA linha, com HasVisibleStyle, e nao com
+// IsWindowVisible -- pela mesma razao de sempre neste programa: IsWindowVisible
+// exige a arvore inteira visivel e mente aqui. O bit da propria janela responde
+// exatamente o que interessa: "o filtro escondeu esta linha?".
+std::vector<HWND> VisibleRowWindows(HWND host) {
+	std::vector<HWND> out;
+	for (HWND window : RowWindows(host)) {
+		if (HasVisibleStyle(window))
+			out.push_back(window);
+	}
+	return out;
+}
+
+// As linhas visiveis de cima para baixo, com nome e altura.
 //
 // Ordenadas pela posicao na TELA e nao pela z-order: a z-order nao promete
 // acompanhar a ordem em que as linhas aparecem, e e a da tela que o usuario esta
@@ -172,7 +196,7 @@ std::vector<HWND> RowWindows(HWND host) {
 // carregada vai para o topo da z-order.
 std::vector<Row> FindRows(HWND host) {
 	std::vector<Row> rows;
-	for (HWND window : RowWindows(host)) {
+	for (HWND window : VisibleRowWindows(host)) {
 		Row row;
 		row.window = window;
 		row.name = NameOf(window);
@@ -183,6 +207,24 @@ std::vector<Row> FindRows(HWND host) {
 	std::sort(rows.begin(), rows.end(),
 			  [](const Row& a, const Row& b) { return a.top < b.top; });
 	return rows;
+}
+
+// A ordem completa por nome, escondidas incluidas.
+//
+// Reconstruida a partir da ordem persistida, e NAO das coordenadas: a posicao Y
+// de uma linha escondida pelo filtro nao segue regra nenhuma -- ela fica parada
+// onde estava enquanto as visiveis se compactam por cima. Ordenar por Y
+// misturaria as duas coisas.
+std::vector<std::wstring> FullNameOrder(HWND host) {
+	std::vector<std::wstring> present;
+	for (HWND window : RowWindows(host))
+		present.push_back(NameOf(window));
+
+	std::vector<std::wstring> out;
+	out.reserve(present.size());
+	for (int index : ApplyDesiredOrder(g_desiredOrder, present))
+		out.push_back(present[static_cast<size_t>(index)]);
+	return out;
 }
 
 std::vector<HWND> WindowsOf(const std::vector<Row>& rows) {
@@ -583,7 +625,7 @@ void RefreshRows() {
 	ApplyOrder(host, rows);
 
 	g_knownHost = host;
-	g_knownRows = RowWindows(host);
+	g_knownRows = VisibleRowWindows(host);
 	RedrawWindow(host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
 }
 
@@ -651,10 +693,14 @@ void RecheckOnMouseMove() {
 		return;
 	}
 
-	// Comparando os HANDLES, e nao a contagem: um outfit de cento e vinte
-	// sliders trocado por outro de cento e vinte recria todas as janelas sem
-	// mudar o numero, e contar nao perceberia.
-	if (RowWindows(g_knownHost) != g_knownRows)
+	// Comparando os HANDLES das linhas VISIVEIS, e nao a contagem de todas.
+	//
+	// Handles e nao contagem porque um outfit de cento e vinte sliders trocado
+	// por outro de cento e vinte recria todas as janelas sem mudar o numero.
+	// Visiveis e nao todas porque digitar no filtro de sliders do Outfit Studio
+	// nao cria nem destroi janela nenhuma -- so acende e apaga -- e olhar so
+	// para o conjunto completo nao veria nada acontecer.
+	if (VisibleRowWindows(g_knownHost) != g_knownRows)
 		RefreshRows();
 }
 
@@ -773,18 +819,24 @@ void FinishDrag(bool cancelled) {
 		PlaceRow(g_drag.host, g_drag.order[i], g_drag.slotTops[i]);
 
 	// A escolha e guardada por NOME, que e o que sobrevive a lista ser refeita.
+	//
+	// E e COSTURADA na ordem completa, nao posta no lugar dela: com o filtro de
+	// sliders ligado o arrasto so viu as linhas que sobraram na tela, e trocar a
+	// ordem inteira pela desse punhado mandaria todas as escondidas para o fim
+	// assim que a busca fosse limpa.
 	if (!cancelled) {
-		g_desiredOrder.clear();
+		std::vector<std::wstring> subsetOrder;
 		for (HWND row : g_drag.order) {
 			std::wstring name = NameOf(row);
 			if (!name.empty())
-				g_desiredOrder.push_back(std::move(name));
+				subsetOrder.push_back(std::move(name));
 		}
+		g_desiredOrder = SpliceOrder(FullNameOrder(g_drag.host), subsetOrder);
 	}
 
 	if (g_drag.host && IsWindow(g_drag.host)) {
 		RedrawWindow(g_drag.host, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
-		g_knownRows = RowWindows(g_drag.host);
+		g_knownRows = VisibleRowWindows(g_drag.host);
 	}
 
 	LogF("reorder: arrasto %s, %d nomes na ordem guardada",
@@ -857,6 +909,51 @@ std::vector<int> ApplyDesiredOrder(const std::vector<std::wstring>& desired,
 			out.push_back(static_cast<int>(i));
 	}
 
+	return out;
+}
+
+std::vector<std::wstring> SpliceOrder(const std::vector<std::wstring>& full,
+									  const std::vector<std::wstring>& subsetOrder) {
+	// Quais lugares da ordem completa pertencem ao subconjunto.
+	//
+	// Casados um a um e da esquerda para a direita, e nao por "este nome esta na
+	// lista?": dois sliders de mesmo nome marcariam os dois lugares mesmo que so
+	// um deles estivesse na tela, e o resultado deixaria de ser uma permutacao.
+	std::vector<bool> claimed(subsetOrder.size(), false);
+	std::vector<bool> isSlot(full.size(), false);
+
+	for (size_t i = 0; i < full.size(); ++i) {
+		for (size_t j = 0; j < subsetOrder.size(); ++j) {
+			if (claimed[j] || subsetOrder[j] != full[i])
+				continue;
+			claimed[j] = true;
+			isSlot[i] = true;
+			break;
+		}
+	}
+
+	// So os nomes que acharam lugar entram no preenchimento.
+	//
+	// Um nome do subconjunto que nao esta na ordem completa nao reclamou lugar
+	// nenhum, e enfia-lo mesmo assim expulsaria alguem: ele entraria num lugar
+	// que pertence a outro, e esse outro sumiria da lista.
+	std::vector<std::wstring> usable;
+	for (size_t j = 0; j < subsetOrder.size(); ++j) {
+		if (claimed[j])
+			usable.push_back(subsetOrder[j]);
+	}
+
+	// Os lugares marcados recebem o subconjunto na ordem nova; os outros ficam
+	// com quem ja estava neles.
+	std::vector<std::wstring> out;
+	out.reserve(full.size());
+	size_t next = 0;
+	for (size_t i = 0; i < full.size(); ++i) {
+		if (isSlot[i] && next < usable.size())
+			out.push_back(usable[next++]);
+		else
+			out.push_back(full[i]);
+	}
 	return out;
 }
 

@@ -158,3 +158,58 @@ TEST(ARepeatedNameConsumesOneSliderAtATime) {
 	TEST_ASSERT(Same(sorted, {0, 1, 2}));
 	return true;
 }
+
+namespace {
+
+std::vector<std::wstring> Names(std::initializer_list<const wchar_t*> items) {
+	return std::vector<std::wstring>(items.begin(), items.end());
+}
+
+bool Reads(const std::vector<std::wstring>& got, std::initializer_list<const wchar_t*> expected) {
+	return got.size() == expected.size() && std::equal(got.begin(), got.end(), expected.begin());
+}
+
+} // namespace
+
+TEST(ReorderingUnderAFilterLeavesTheHiddenSlidersWhereTheyWere) {
+	// O filtro de sliders do Outfit Studio esconde linhas, e o arrasto so ve as
+	// que sobraram. Os lugares que elas ocupavam trocam de dono; quem estava
+	// escondido nem fica sabendo que houve um arrasto.
+	TEST_ASSERT(Reads(SpliceOrder(Names({L"A", L"B", L"C", L"D", L"E", L"F"}),
+								  Names({L"F", L"B", L"D"})),
+					  {L"A", L"F", L"C", L"B", L"E", L"D"}));
+
+	// Sem filtro, o subconjunto e a lista inteira e a costura vira uma troca
+	// simples -- que e o caso comum, e tem que continuar valendo.
+	TEST_ASSERT(Reads(SpliceOrder(Names({L"A", L"B", L"C"}), Names({L"C", L"A", L"B"})),
+					  {L"C", L"A", L"B"}));
+	return true;
+}
+
+TEST(SplicingIgnoresNamesThatAreNotInTheFullOrder) {
+	// Nome que nao esta na ordem completa nao abre lugar para si: ele nao tinha
+	// lugar nenhum para trocar.
+	TEST_ASSERT(Reads(SpliceOrder(Names({L"A", L"B"}), Names({L"B", L"Fantasma", L"A"})),
+					  {L"B", L"A"}));
+
+	// Subconjunto vazio nao mexe em nada.
+	TEST_ASSERT(Reads(SpliceOrder(Names({L"A", L"B"}), Names({})), {L"A", L"B"}));
+
+	// Ordem completa vazia devolve vazio, e nao o subconjunto.
+	TEST_ASSERT(SpliceOrder(Names({}), Names({L"A"})).empty());
+	return true;
+}
+
+TEST(SplicingKeepsTheResultAPermutationEvenWithRepeatedNames) {
+	// Dois sliders de mesmo nome com so um deles na tela: marcar os dois lugares
+	// faria o outro sumir da lista. Cada nome do subconjunto reclama um lugar, e
+	// so um.
+	const std::vector<std::wstring> got =
+		SpliceOrder(Names({L"Igual", L"Meio", L"Igual"}), Names({L"Igual"}));
+	TEST_ASSERT(Reads(got, {L"Igual", L"Meio", L"Igual"}));
+
+	std::vector<std::wstring> sorted = got;
+	std::sort(sorted.begin(), sorted.end());
+	TEST_ASSERT(Reads(sorted, {L"Igual", L"Igual", L"Meio"}));
+	return true;
+}

@@ -65,3 +65,23 @@ void MoveInOrder(std::vector<HWND>& order, int from, int to);
 // Nome que sumiu simplesmente nao entra.
 std::vector<int> ApplyDesiredOrder(const std::vector<std::wstring>& desired,
 								   const std::vector<std::wstring>& present);
+
+// Costura uma ordem nova de um SUBCONJUNTO de volta na ordem completa.
+//
+// Existe por causa do filtro de sliders do proprio Outfit Studio. Com ele
+// ligado, o usuario arrasta entre as linhas que SOBRARAM na tela, e as
+// escondidas nao podem nem saber que houve um arrasto -- elas nao estavam la
+// para serem reordenadas.
+//
+// Os lugares que o subconjunto ocupava trocam de dono; o resto fica parado:
+//
+//   completa   A B C D E F
+//   na tela      B   D   F
+//   arrastado    F   B   D
+//   resultado  A F C B E D
+//
+// Substituir a ordem completa pela do subconjunto -- que era o que a versao
+// anterior fazia -- jogaria A, C e E para o fim assim que a busca fosse limpa,
+// porque nomes fora da ordem desejada vao para o fim por definicao.
+std::vector<std::wstring> SpliceOrder(const std::vector<std::wstring>& full,
+									  const std::vector<std::wstring>& subsetOrder);

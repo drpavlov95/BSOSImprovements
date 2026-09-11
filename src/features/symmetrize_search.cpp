@@ -23,6 +23,7 @@ const UINT_PTR kPendingSubclassId = 0xB510;
 const UINT_PTR kDialogSubclassId = 0xB511;
 const UINT_PTR kEditSubclassId = 0xB512;
 const UINT_PTR kScrollSubclassId = 0xB513;
+const UINT_PTR kRowHostSubclassId = 0xB514;
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
@@ -155,6 +156,25 @@ std::vector<HWND> AllDescendants(HWND root) {
 void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::vector<int>& placed);
 
 void CompactHost(HWND host) {
+	// Grupo recolhido nao se mexe -- nem por dentro.
+	//
+	// Este era o defeito que quebrava o dialogo. A versao anterior reposicionava
+	// os controles de dentro mesmo com o grupo fechado, e so DEPOIS desistia, no
+	// ShrinkHostToFit, por causa deste mesmo teste. Resultado: as linhas ficavam
+	// numa posicao compactada que ninguem via, o envelope continuava do tamanho
+	// antigo, e ao expandir o grupo aparecia aquilo -- cabecalho num lugar,
+	// linhas em outro, buracos no meio.
+	//
+	// E o wx nao conserta sozinho ao expandir: mostrar uma janela nao redimensiona
+	// nada, entao o sizer dele nao roda e as posicoes que escrevemos ficam. Ou
+	// seja, escrever com o grupo fechado e escrever para valer, so que as cegas.
+	//
+	// Com o grupo fechado nao ha nada a fazer: o filtro ja marcou quem casa e ja
+	// escondeu quem nao casa, e isso basta. A geometria e refeita quando ele
+	// abrir -- e o painel avisa, por WM_SHOWWINDOW.
+	if (!HasVisibleStyle(host))
+		return;
+
 	std::vector<AsymRow*> rows;
 	for (AsymRow& row : g_rows) {
 		if (row.host == host)
@@ -229,10 +249,6 @@ void ShrinkHostToFit(HWND host, const std::vector<AsymRow*>& rows, const std::ve
 	}
 	if (!wrapper || GetParent(wrapper) != g_scroll)
 		return; // o painel nao pendura na area que rola: nao mexe
-
-	// Grupo recolhido pelo usuario: quem manda no tamanho e o wx.
-	if (!HasVisibleStyle(host))
-		return;
 
 	// Onde termina a ultima linha que sobrou.
 	int lastBottom = 0;
@@ -417,13 +433,53 @@ void ShrinkScrollRangeToContent() {
 		 bottom, page, before.nPos, before.nMax, before.nPage, after.nPos, after.nMax, after.nPage);
 }
 
-void RefreshRulers() {
-	for (AsymRow& row : g_rows) {
-		if (!row.visible)
-			return; // ja filtrado: as posicoes atuais nao sao as naturais
+// Os paineis que tem linhas, sem repetir.
+std::vector<HWND> RowHosts() {
+	std::vector<HWND> hosts;
+	for (const AsymRow& row : g_rows) {
+		bool known = false;
+		for (HWND seen : hosts)
+			known = known || (seen == row.host);
+		if (!known)
+			hosts.push_back(row.host);
 	}
-	for (AsymRow& row : g_rows)
-		row.top = static_cast<int>(RectInParent(row.check).top);
+	return hosts;
+}
+
+void RefreshRulers() {
+	// Por PAINEL, e nao pela lista inteira.
+	//
+	// A versao anterior varria todas as linhas e desistia na primeira escondida
+	// que encontrasse -- e as linhas dos dois grupos, sliders e ossos, moram na
+	// mesma lista. Bastava um osso filtrado para a regua dos sliders parar de
+	// aprender posicao nova para sempre, e dai vinha a linha aparecendo cem
+	// pixels abaixo do cabecalho depois de expandir ou recolher um grupo: a
+	// regua ainda era a de antes da mudanca.
+	for (HWND host : RowHosts()) {
+		bool natural = true;
+		for (const AsymRow& row : g_rows) {
+			if (row.host == host && !row.visible)
+				natural = false;
+		}
+		if (!natural)
+			continue; // ja filtrado: as posicoes atuais nao sao as naturais
+
+		for (AsymRow& row : g_rows) {
+			if (row.host == host)
+				row.top = static_cast<int>(RectInParent(row.check).top);
+		}
+	}
+}
+
+// Pede a fase adiada de geometria.
+//
+// Adiada sempre, de todos os chamadores: o ponto e nunca mexer na geometria
+// enquanto o wx ainda esta mexendo nela.
+void ScheduleGeometryRefresh() {
+	if (!g_deferredGeometry)
+		g_deferredGeometry = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeGeometry");
+	if (g_deferredGeometry && g_dialog)
+		PostMessageW(g_dialog, g_deferredGeometry, 0, 0);
 }
 
 void ApplyFilter() {
@@ -482,12 +538,8 @@ void ApplyFilter() {
 	//
 	// E a mesma licao do reorder de sliders, que so passou a funcionar quando
 	// parou de tentar prever o layout do wx e passou a corrigi-lo depois.
-	if (touched > 0) {
-		if (!g_deferredGeometry)
-			g_deferredGeometry = RegisterWindowMessageW(L"BSOSImprovements_SymmetrizeGeometry");
-		if (g_deferredGeometry && g_dialog)
-			PostMessageW(g_dialog, g_deferredGeometry, 0, 0);
-	}
+	if (touched > 0)
+		ScheduleGeometryRefresh();
 
 	// O desenho fica segurado ate la, senao a lista pisca uma vez sem compactar
 	// entre uma tecla e a proxima. Se nada mudou, nao ha fase adiada e ele volta
@@ -510,17 +562,15 @@ void ApplyFilteredGeometry() {
 	if (!g_scroll || !IsWindow(g_scroll) || g_rows.empty())
 		return;
 
+	// A regua primeiro: expandir um grupo muda as posicoes naturais dele, e
+	// compactar com a regua velha poria as linhas onde elas nao estao mais.
+	// Painel filtrado e pulado la dentro, entao isto e seguro a qualquer hora.
+	RefreshRulers();
+
 	// Um painel por vez: cada grupo recolhivel tem a propria regua de lugares, e
-	// misturar as duas empilharia osso em cima de slider.
-	std::vector<HWND> hosts;
-	for (const AsymRow& row : g_rows) {
-		bool known = false;
-		for (HWND seen : hosts)
-			known = known || (seen == row.host);
-		if (!known)
-			hosts.push_back(row.host);
-	}
-	for (HWND host : hosts)
+	// misturar as duas empilharia osso em cima de slider. Os recolhidos saem
+	// sozinhos, dentro de CompactHost.
+	for (HWND host : RowHosts())
 		CompactHost(host);
 
 	ShrinkScrollRangeToContent();
@@ -646,6 +696,24 @@ void AuditScrollContent() {
 			 static_cast<void*>(child), ClassOf(child).c_str(), rc.top, rc.bottom,
 			 HasVisibleStyle(child) ? 1 : 0, child == g_auditWrapper ? " <- o envelope" : "");
 	}
+}
+
+// Um grupo recolhivel avisando que abriu.
+//
+// E o gatilho que faltava. Enquanto o grupo esta fechado a geometria dele fica
+// congelada de proposito -- CompactHost recusa mexer -- e sem este aviso ela
+// continuaria congelada depois de aberto, porque abrir um grupo nao
+// redimensiona a area que rola e nenhuma das outras janelas observadas fica
+// sabendo. WM_SHOWWINDOW chega na PROPRIA janela que apareceu, que e
+// exatamente a que precisa ser recalculada.
+LRESULT CALLBACK RowHostSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_NCDESTROY)
+		RemoveWindowSubclass(hwnd, RowHostSubclassProc, id);
+
+	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
+	if (msg == WM_SHOWWINDOW && wParam)
+		ScheduleGeometryRefresh();
+	return result;
 }
 
 LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
@@ -792,6 +860,12 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	AddSearchBox(dlg);
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
+
+	// Cada painel de linhas e observado: e por ele que se sabe que um grupo
+	// recolhivel acabou de abrir, e que a geometria congelada dele precisa ser
+	// refeita.
+	for (HWND host : RowHosts())
+		SetWindowSubclass(host, RowHostSubclassProc, kRowHostSubclassId, 0);
 
 	// O layout so vale depois que o dialogo estiver montado: aqui ainda
 	// estamos dentro do WM_WINDOWPOSCHANGING que o exibe, e o retangulo da
