@@ -43,7 +43,12 @@ HWND g_band = nullptr;
 
 HWND g_edit = nullptr;
 
-// A lista de resultados, nossa, por cima da area original.
+// A lista, nossa, no lugar da original.
+//
+// Fica no lugar dela a janela inteira, e nao so enquanto se busca: uma lista
+// que aparece por cima e some de novo se anuncia como enxerto. Esta e a lista
+// do dialogo enquanto ele existir, com busca vazia ou nao, e a do programa fica
+// intacta debaixo dela -- sem nunca ser vista, e sem nunca ser tocada.
 HWND g_results = nullptr;
 
 // Verdadeiro enquanto SOMOS nos mexendo na lista de resultados.
@@ -199,10 +204,12 @@ RowText SplitRow(const AsymRow& row) {
 	return out;
 }
 
-// Poe a lista de resultados exatamente em cima da area original.
+// Poe a nossa lista exatamente onde a original esta.
 //
-// Em cima, e nao no lugar: a original continua la embaixo, do tamanho que
-// sempre teve. Apagar a busca e so esconder esta.
+// Exatamente: o retangulo sai da propria janela original, entao a nossa ocupa a
+// mesma faixa que o wx reservou para ela, nem um pixel a mais. Sobrar para baixo
+// engoliria o "Vertices that will be symmetrized:", que mora fora da area que
+// rola e precisa continuar a vista -- e ele que diz o que o botao vai fazer.
 void LayoutResults() {
 	if (!g_results || !g_scroll || !g_dialog || !IsWindow(g_scroll))
 		return;
@@ -215,6 +222,20 @@ void LayoutResults() {
 	SetWindowPos(g_results, HWND_TOP, static_cast<int>(rc.left), static_cast<int>(rc.top), width,
 				 static_cast<int>(rc.bottom - rc.top), SWP_NOACTIVATE);
 
+	// Uma vez por retangulo novo.
+	//
+	// A lista tem que cobrir a area que rola e parar onde ela para. O numero que
+	// importa e o rodape: se ele passar do topo do "Vertices that will be
+	// symmetrized:", a lista esta engolindo o rotulo que diz o que o botao faz.
+	static RECT logged = {};
+	if (!EqualRect(&rc, &logged)) {
+		logged = rc;
+		RECT client = {};
+		GetClientRect(g_dialog, &client);
+		LogF("symmetrize: a lista vai de %ld a %ld, e o dialogo tem %ld de altura", rc.top,
+			 rc.bottom, client.bottom - client.top);
+	}
+
 	// Os numeros tem largura fixa e o nome fica com o resto, como na lista
 	// original: la a coluna do meio e a growablecol do wxFlexGridSizer.
 	const int average = 100;
@@ -225,7 +246,10 @@ void LayoutResults() {
 	ListView_SetColumnWidth(g_results, 2, count);
 }
 
-// Refaz a lista de resultados a partir do que esta na caixa de busca.
+// Refaz a lista a partir do que esta na caixa de busca.
+//
+// Busca vazia mostra TUDO, e nao esconde a lista: ela e a lista do dialogo, nao
+// um resultado de busca que vai e volta. Digitar so tira o que nao casa.
 void RefreshResults() {
 	if (!g_results || !IsWindow(g_results))
 		return;
@@ -233,20 +257,19 @@ void RefreshResults() {
 	const std::wstring query = SearchText();
 
 	g_syncing = true;
+	SendMessageW(g_results, WM_SETREDRAW, FALSE, 0);
 	ListView_DeleteAllItems(g_results);
 	g_shown.clear();
-
-	if (query.empty()) {
-		g_syncing = false;
-		ShowWindow(g_results, SW_HIDE);
-		LogF("symmetrize: busca vazia, a lista original volta a aparecer");
-		return;
-	}
 
 	int item = 0;
 	for (size_t i = 0; i < g_rows.size(); ++i) {
 		const AsymRow& row = g_rows[i];
-		if (row.fixed || !MatchesFilter(row.name, query))
+
+		// As linhas de cabecalho -- "Position", "111 sliders", "26 bones" --
+		// ficam sempre no topo. Elas marcam varias de uma vez, e some-las
+		// durante a busca tiraria do usuario justamente o atalho que ele usa
+		// depois de achar o grupo que queria.
+		if (!row.fixed && !MatchesFilter(row.name, query))
 			continue;
 
 		const RowText text = SplitRow(row);
@@ -270,12 +293,14 @@ void RefreshResults() {
 		++item;
 	}
 
+	SendMessageW(g_results, WM_SETREDRAW, TRUE, 0);
 	g_syncing = false;
 
 	LayoutResults();
 	ShowWindow(g_results, SW_SHOW);
+	RedrawWindow(g_results, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
 
-	LogF("symmetrize: busca '%ls' -- %d de %d linhas na lista de resultados", query.c_str(), item,
+	LogF("symmetrize: busca '%ls' -- %d de %d linhas na lista", query.c_str(), item,
 		 static_cast<int>(g_rows.size()));
 }
 
@@ -602,6 +627,9 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	AddSearchBox(dlg);
 	AddResultsList(dlg);
+
+	// Ja nasce cheia. A lista do programa nunca chega a ser vista.
+	RefreshResults();
 	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
 	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
 	if (g_band != scroll)
