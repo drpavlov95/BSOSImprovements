@@ -24,6 +24,7 @@ const UINT_PTR kPendingSubclassId = 0xB510;
 const UINT_PTR kDialogSubclassId = 0xB511;
 const UINT_PTR kEditSubclassId = 0xB512;
 const UINT_PTR kScrollSubclassId = 0xB513;
+const UINT_PTR kHeaderSubclassId = 0xB514;
 
 HHOOK g_hook = nullptr;
 HWND g_frame = nullptr;
@@ -64,8 +65,21 @@ struct RowText {
 	std::wstring count;
 };
 
+struct SectionState {
+	HWND host = nullptr;
+	HWND header = nullptr;
+	std::wstring label;
+	bool expanded = true;
+};
+
 // Para cada item da lista, de qual linha ele veio.
 std::vector<int> g_shown;
+
+// Para cada item visivel: indice de g_rows, ou -1 para um cabecalho de grupo.
+// g_itemSections diz qual grupo corresponde a cada cabecalho.
+std::vector<int> g_itemSections;
+std::vector<SectionState> g_sections;
+HFONT g_sectionFont = nullptr;
 
 // O texto de cada linha, ja separado em colunas, na mesma ordem de g_rows.
 //
@@ -152,6 +166,39 @@ std::wstring SearchText() {
 	wchar_t raw[256] = {};
 	GetWindowTextW(g_edit, raw, 256);
 	return raw;
+}
+
+HWND FindSectionHeader(HWND host) {
+	if (!host)
+		return nullptr;
+	HWND collapse = GetParent(host);
+	for (HWND child : ChildrenOf(collapse)) {
+		if (IsCheckBox(child))
+			continue;
+		if (!TextOf(child).empty())
+			return child;
+	}
+	return nullptr;
+}
+
+std::wstring SectionLabel(HWND host) {
+	if (HWND header = FindSectionHeader(host))
+		return TextOf(header);
+	return L"Group";
+}
+
+int FindSection(HWND host) {
+	for (size_t i = 0; i < g_sections.size(); ++i)
+		if (g_sections[i].host == host)
+			return static_cast<int>(i);
+	return -1;
+}
+
+COLORREF DialogSurfaceColor() {
+	// O dialogo e uma janela de dialogo, nao uma area de documento. COLOR_WINDOW
+	// produz branco puro no tema claro, enquanto o wx usa COLOR_3DFACE para o
+	// fundo desta caixa -- exatamente a diferenca visivel na primeira versao.
+	return g_dark ? kDarkControlBackground : GetSysColor(COLOR_3DFACE);
 }
 
 // Uma janela da arvore, e a que distancia da raiz ela esta.
@@ -277,7 +324,9 @@ void LayoutOurControls() {
 		return;
 
 	const int band = BandHeight(g_dialog);
-	SetWindowPos(g_edit, HWND_TOP, left, top, width, band - 4,
+	// O wx coloca as celulas cinco pixels para dentro da area rolavel. A busca
+	// acompanha essa margem, para nao parecer uma caixa colada na moldura.
+	SetWindowPos(g_edit, HWND_TOP, left + 5, top + 2, width - 10, band - 6,
 				 SWP_NOACTIVATE | SWP_SHOWWINDOW);
 	SetWindowPos(g_results, HWND_TOP, left, top + band, width, height - band,
 				 SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -323,41 +372,76 @@ void RefreshResults() {
 	SendMessageW(g_results, WM_SETREDRAW, FALSE, 0);
 	ListView_DeleteAllItems(g_results);
 	g_shown.clear();
+	g_itemSections.clear();
 
 	int item = 0;
+	// Os agregados ficam no topo, como no XRC original.
 	for (size_t i = 0; i < g_rows.size() && i < g_text.size(); ++i) {
-		const AsymRow& row = g_rows[i];
-		const RowText& text = g_text[i];
-
-		// As linhas de cabecalho -- "Position", "111 sliders", "26 bones" --
-		// ficam sempre no topo. Elas marcam varias de uma vez, e some-las
-		// durante a busca tiraria do usuario justamente o atalho que ele usa
-		// depois de achar o grupo que queria.
-		//
-		// A busca casa com o NOME, e nao com a linha inteira. AsymRow::name
-		// junta tudo o que esta na altura da caixa -- "PecsClavicle 0.000001
-		// 132" -- entao digitar "1" casava com quase todas por causa dos
-		// numeros, e digitar "0" casava com todas.
-		if (!row.fixed && !MatchesFilter(text.name, query))
+		if (!g_rows[i].fixed)
 			continue;
-
 		LVITEMW entry = {};
 		entry.mask = LVIF_TEXT;
 		entry.iItem = item;
-		entry.pszText = const_cast<wchar_t*>(text.name.c_str());
+		std::wstring displayName = g_text[i].name;
+		const LRESULT checkState = SendMessageW(g_rows[i].check, BM_GETCHECK, 0, 0);
+		if (checkState == BST_INDETERMINATE)
+			displayName += L" (mixed)";
+		entry.pszText = displayName.data();
 		if (ListView_InsertItem(g_results, &entry) < 0)
 			continue;
-
-		ListView_SetItemText(g_results, item, 1, const_cast<wchar_t*>(text.average.c_str()));
-		ListView_SetItemText(g_results, item, 2, const_cast<wchar_t*>(text.count.c_str()));
-
-		// O resultado nasce com a marcacao que a caixa de verdade tem. Sem isto
-		// a busca pareceria desmarcar tudo o que o usuario ja tinha escolhido.
-		ListView_SetCheckState(g_results, item,
-							   SendMessageW(row.check, BM_GETCHECK, 0, 0) == BST_CHECKED);
-
+		ListView_SetItemText(g_results, item, 1, const_cast<wchar_t*>(g_text[i].average.c_str()));
+		ListView_SetItemText(g_results, item, 2, const_cast<wchar_t*>(g_text[i].count.c_str()));
+		ListView_SetCheckState(g_results, item, checkState == BST_CHECKED);
 		g_shown.push_back(static_cast<int>(i));
+		g_itemSections.push_back(-1);
 		++item;
+	}
+
+	// Depois dos agregados, cada painel ganha seu cabecalho expansivel e suas
+	// linhas. O estado aberto/fechado continua valendo durante a busca: assim e
+	// possivel recolher "Sliders" para enxergar e abrir "Bones" sem perder o
+	// filtro atual.
+	for (size_t section = 0; section < g_sections.size(); ++section) {
+		const SectionState& state = g_sections[section];
+
+		LVITEMW header = {};
+		header.mask = LVIF_TEXT | LVIF_STATE;
+		header.stateMask = LVIS_STATEIMAGEMASK;
+		header.state = 0; // cabecalho nao e checkbox
+		header.iItem = item;
+		std::wstring title = state.expanded ? L"\x25BE " : L"\x25B8 ";
+		title += state.label;
+		header.pszText = title.data();
+		if (ListView_InsertItem(g_results, &header) < 0)
+			continue;
+		ListView_SetItemState(g_results, item, 0, LVIS_STATEIMAGEMASK);
+		g_shown.push_back(-1);
+		g_itemSections.push_back(static_cast<int>(section));
+		++item;
+
+		const bool showRows = state.expanded;
+		if (!showRows)
+			continue;
+		for (size_t i = 0; i < g_rows.size() && i < g_text.size(); ++i) {
+			const AsymRow& row = g_rows[i];
+			if (row.fixed || row.host != state.host || !MatchesFilter(g_text[i].name, query))
+				continue;
+			const RowText& text = g_text[i];
+			LVITEMW entry = {};
+			entry.mask = LVIF_TEXT;
+			entry.iItem = item;
+			std::wstring displayName = text.name;
+			entry.pszText = displayName.data();
+			if (ListView_InsertItem(g_results, &entry) < 0)
+				continue;
+			ListView_SetItemText(g_results, item, 1, const_cast<wchar_t*>(text.average.c_str()));
+			ListView_SetItemText(g_results, item, 2, const_cast<wchar_t*>(text.count.c_str()));
+			ListView_SetCheckState(g_results, item,
+							   SendMessageW(row.check, BM_GETCHECK, 0, 0) == BST_CHECKED);
+			g_shown.push_back(static_cast<int>(i));
+			g_itemSections.push_back(-1);
+			++item;
+		}
 	}
 
 	SendMessageW(g_results, WM_SETREDRAW, TRUE, 0);
@@ -368,6 +452,55 @@ void RefreshResults() {
 
 	LogF("symmetrize: busca '%ls' -- %d de %d linhas na lista", query.c_str(), item,
 		 static_cast<int>(g_rows.size()));
+}
+
+// Reflete todos os estados de volta na lista. Um clique em "111 sliders" muda
+// o grupo inteiro, e um clique individual pode mudar o agregado para o terceiro
+// estado; portanto atualizar so a linha clicada deixa a interface mentindo.
+void SyncResultChecks() {
+	if (!g_results || !IsWindow(g_results))
+		return;
+
+	g_syncing = true;
+	SendMessageW(g_results, WM_SETREDRAW, FALSE, 0);
+	for (size_t item = 0; item < g_shown.size(); ++item) {
+		const int source = g_shown[item];
+		if (source < 0 || source >= static_cast<int>(g_rows.size()) ||
+			source >= static_cast<int>(g_text.size()))
+			continue;
+
+		const AsymRow& row = g_rows[static_cast<size_t>(source)];
+		const LRESULT state = SendMessageW(row.check, BM_GETCHECK, 0, 0);
+		ListView_SetCheckState(g_results, static_cast<int>(item), state == BST_CHECKED);
+
+		std::wstring displayName = g_text[static_cast<size_t>(source)].name;
+		if (row.fixed && state == BST_INDETERMINATE)
+			displayName += L" (mixed)";
+		ListView_SetItemText(g_results, static_cast<int>(item), 0, displayName.data());
+	}
+	SendMessageW(g_results, WM_SETREDRAW, TRUE, 0);
+	g_syncing = false;
+	RedrawWindow(g_results, nullptr, nullptr, RDW_INVALIDATE);
+}
+
+void ToggleSection(int section) {
+	if (section < 0 || section >= static_cast<int>(g_sections.size()))
+		return;
+	SectionState& state = g_sections[static_cast<size_t>(section)];
+	state.expanded = !state.expanded;
+
+	// Propague o clique para o cabecalho wx original quando ele existir. O
+	// espelho continua responsavel pela pintura, mas o dialogo verdadeiro tambem
+	// conserva o estado para o calculo do sizer e para a proxima abertura.
+	if (state.header && IsWindow(state.header)) {
+		RECT rc = {};
+		GetClientRect(state.header, &rc);
+		const LPARAM point = MAKELPARAM((rc.right - rc.left) / 2,
+									(rc.bottom - rc.top) / 2);
+		SendMessageW(state.header, WM_LBUTTONDOWN, MK_LBUTTON, point);
+		SendMessageW(state.header, WM_LBUTTONUP, 0, point);
+	}
+	RefreshResults();
 }
 
 // O usuario marcou ou desmarcou um resultado.
@@ -393,28 +526,21 @@ void OnResultToggled(const NMLISTVIEW* info) {
 		return;
 
 	const bool wanted = (after == 2);
-	const bool current = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED;
-	if (wanted == current)
-		return;
-
-	// BM_CLICK, e nao BM_SETCHECK.
+	// O estado e ajustado e o BN_CLICKED e entregue ao wxWidgets.
 	//
 	// O programa so recalcula "Vertices that will be symmetrized" quando RECEBE
-	// o clique -- a conta esta no tratador dele, nao no controle. BM_SETCHECK
-	// mudaria o desenho da caixa e deixaria a conta parada, e o botao Symmetrize
-	// agiria sobre outra coisa do que a tela mostra.
-	SendMessageW(check, BM_CLICK, 0, 0);
+	// a notificacao -- a conta esta no tratador dele, nao no controle.
+	const bool landed = ActivateAsymCheck(check, wanted);
 
-	// A caixa esta ESCONDIDA junto com a lista original, e o clique precisa
-	// valer mesmo assim. Ler o estado de volta prova que valeu: se ele virou, o
-	// controle processou o clique, e quem processa manda o aviso ao dono -- que e
-	// onde o programa refaz a conta. Se um dia isto parar de virar, e aqui que
-	// aparece, e nao tres telas adiante.
-	const bool landed = SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	// A caixa esta ESCONDIDA junto com a lista original, mas continua sendo a
+	// fonte de verdade. Conferir o estado depois da notificacao detecta tanto um
+	// controle que recusou a mudanca quanto um tratador do programa que a desfez.
 	if (landed != wanted) {
 		LogF("symmetrize: a caixa de '%ls' nao aceitou o clique -- continua %s",
 			 g_rows[static_cast<size_t>(index)].name.c_str(), landed ? "marcada" : "desmarcada");
 	}
+
+	SyncResultChecks();
 }
 
 // A area que rola tambem e observada, e nao so o dialogo.
@@ -450,6 +576,38 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 		case WM_NOTIFY: {
 			auto* head = reinterpret_cast<NMHDR*>(lParam);
+			if (head && head->hwndFrom == g_results && head->code == NM_CLICK) {
+				auto* click = reinterpret_cast<NMITEMACTIVATE*>(lParam);
+				if (click && click->iItem >= 0 && click->iItem < static_cast<int>(g_itemSections.size())) {
+					const int section = g_itemSections[static_cast<size_t>(click->iItem)];
+					if (section >= 0) {
+						ToggleSection(section);
+						return 0;
+					}
+				}
+			}
+			if (head && head->hwndFrom == g_results && head->code == NM_CUSTOMDRAW) {
+				auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
+				if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
+					return CDRF_NOTIFYITEMDRAW;
+				if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT &&
+					draw->nmcd.dwItemSpec < g_itemSections.size() &&
+					g_itemSections[static_cast<size_t>(draw->nmcd.dwItemSpec)] >= 0) {
+					HFONT font = reinterpret_cast<HFONT>(SendMessageW(g_results, WM_GETFONT, 0, 0));
+					if (font) {
+						LOGFONTW lf = {};
+						if (GetObjectW(font, sizeof(lf), &lf) == sizeof(lf)) {
+							lf.lfWeight = FW_BOLD;
+							if (!g_sectionFont)
+								g_sectionFont = CreateFontIndirectW(&lf);
+							if (g_sectionFont)
+								SelectObject(draw->nmcd.hdc, g_sectionFont);
+						}
+					}
+					return CDRF_NEWFONT;
+				}
+				return CDRF_DODEFAULT;
+			}
 			if (head && head->hwndFrom == g_results && head->code == LVN_ITEMCHANGED) {
 				auto* info = reinterpret_cast<NMLISTVIEW*>(lParam);
 				if (!g_syncing && info && (info->uChanged & LVIF_STATE))
@@ -478,12 +636,18 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 		case WM_NCDESTROY:
 			RemoveWindowSubclass(hwnd, DialogSubclassProc, id);
+			if (g_sectionFont) {
+				DeleteObject(g_sectionFont);
+				g_sectionFont = nullptr;
+			}
 			g_dialog = nullptr;
 			g_scroll = nullptr;
 			g_edit = nullptr;
 			g_results = nullptr;
 			g_syncing = false;
 			g_shown.clear();
+			g_itemSections.clear();
+			g_sections.clear();
 			g_text.clear();
 			g_rows.clear();
 			break;
@@ -497,7 +661,10 @@ LRESULT CALLBACK DialogSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 // Enter na caixa de busca dispararia o botao padrao do dialogo, que aqui e
 // "Mask"/"Symmetrize" -- ou seja, executaria a operacao. Aqui ele nao faz nada:
 // a lista de resultados ja e refeita a cada tecla.
-LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_NCDESTROY)
+		RemoveWindowSubclass(hwnd, EditSubclassProc, id);
+
 	if (msg == WM_GETDLGCODE) {
 		LRESULT code = DefSubclassProc(hwnd, msg, wParam, lParam);
 		auto* incoming = reinterpret_cast<MSG*>(lParam);
@@ -534,7 +701,11 @@ void AddSearchBox(HWND dlg) {
 	if (font)
 		SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 	SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search sliders and bones..."));
-	SetWindowSubclass(edit, EditSubclassProc, kEditSubclassId, 0);
+	if (!SetWindowSubclass(edit, EditSubclassProc, kEditSubclassId, 0)) {
+		LogF("symmetrize: nao consegui subclassar a caixa de busca");
+		DestroyWindow(edit);
+		return;
+	}
 
 	g_dark = DetectAppearance(AppDir()) == Appearance::Dark;
 	if (g_dark)
@@ -543,13 +714,70 @@ void AddSearchBox(HWND dlg) {
 	g_edit = edit;
 }
 
+LRESULT CALLBACK HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+									UINT_PTR id, DWORD_PTR) {
+	if (msg == WM_NCDESTROY) {
+		RemoveWindowSubclass(hwnd, HeaderSubclassProc, id);
+		return DefSubclassProc(hwnd, msg, wParam, lParam);
+	}
+
+	if (msg == WM_ERASEBKGND)
+		return 1;
+	if (msg != WM_PAINT)
+		return DefSubclassProc(hwnd, msg, wParam, lParam);
+
+	PAINTSTRUCT paint = {};
+	HDC dc = BeginPaint(hwnd, &paint);
+	if (!dc)
+		return 0;
+
+	const COLORREF background = DialogSurfaceColor();
+	const COLORREF foreground = g_dark ? kDarkText : GetSysColor(COLOR_WINDOWTEXT);
+	HBRUSH brush = CreateSolidBrush(background);
+	FillRect(dc, &paint.rcPaint, brush);
+	DeleteObject(brush);
+
+	HFONT font = reinterpret_cast<HFONT>(SendMessageW(g_results, WM_GETFONT, 0, 0));
+	HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+	SetBkMode(dc, TRANSPARENT);
+	SetTextColor(dc, foreground);
+	const wchar_t* titles[] = {L"Type", L"Average", L"Count"};
+	for (int i = 0; i < 3; ++i) {
+		RECT cell = {};
+		if (!Header_GetItemRect(hwnd, i, &cell))
+			continue;
+		InflateRect(&cell, -5, 0);
+		DrawTextW(dc, titles[i], -1, &cell,
+				  DT_SINGLELINE | DT_VCENTER | (i == 0 ? DT_LEFT : DT_RIGHT));
+	}
+	if (old)
+		SelectObject(dc, old);
+	EndPaint(hwnd, &paint);
+	return 0;
+}
+
+// O dialogo usa fontes wx por controle. A fonte do dialogo e quase igual, mas
+// nao necessariamente a mesma que as caixas das linhas (principalmente com DPI
+// ou tema alterados). A lista espelho deve copiar a fonte de uma linha real,
+// pois e ela que o usuario esta comparando visualmente.
+HFONT ResultRowFont(HWND dlg) {
+	for (const AsymRow& row : g_rows) {
+		if (row.check && IsWindow(row.check)) {
+			HFONT font = reinterpret_cast<HFONT>(SendMessageW(row.check, WM_GETFONT, 0, 0));
+			if (font)
+				return font;
+		}
+	}
+	return dlg ? reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0)) : nullptr;
+}
+
 void AddResultsList(HWND dlg) {
 	INITCOMMONCONTROLSEX common = {};
 	common.dwSize = sizeof(common);
 	common.dwICC = ICC_LISTVIEW_CLASSES;
 	InitCommonControlsEx(&common);
 
-	HFONT font = reinterpret_cast<HFONT>(SendMessageW(dlg, WM_GETFONT, 0, 0));
+	HFONT font = ResultRowFont(dlg);
 	HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(dlg, GWLP_HINSTANCE));
 
 	// A mesma borda da janela que ela substitui.
@@ -563,7 +791,7 @@ void AddResultsList(HWND dlg) {
 
 	HWND list = CreateWindowExW(edge, WC_LISTVIEWW, L"",
 								WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
-									LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | border,
+									LVS_NOSORTHEADER | border,
 								0, 0, 10, 10, dlg,
 								reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdResults)), inst,
 								nullptr);
@@ -572,8 +800,7 @@ void AddResultsList(HWND dlg) {
 		return;
 	}
 
-	ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT |
-												LVS_EX_DOUBLEBUFFER);
+	ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
 	if (font)
 		SendMessageW(list, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
@@ -590,11 +817,24 @@ void AddResultsList(HWND dlg) {
 		ListView_InsertColumn(list, i, &column);
 	}
 
+	// O cabecalho nativo do ListView e uma barra de tabela com relevo. O dialogo
+	// original usa tres wxStaticText simples no fundo do painel; desenhar o
+	// SysHeader desse jeito preserva a mesma informacao sem introduzir outro
+	// elemento visual entre a busca e as linhas.
+	if (HWND header = ListView_GetHeader(list)) {
+		if (!SetWindowSubclass(header, HeaderSubclassProc, kHeaderSubclassId, 0))
+			LogF("symmetrize: nao consegui nivelar o cabecalho da lista");
+	}
+
 	if (g_dark) {
 		ApplyDarkControlTheme(list, false);
-		ListView_SetBkColor(list, kDarkControlBackground);
-		ListView_SetTextBkColor(list, kDarkControlBackground);
+		ListView_SetBkColor(list, DialogSurfaceColor());
+		ListView_SetTextBkColor(list, DialogSurfaceColor());
 		ListView_SetTextColor(list, kDarkText);
+	} else {
+		ListView_SetBkColor(list, DialogSurfaceColor());
+		ListView_SetTextBkColor(list, DialogSurfaceColor());
+		ListView_SetTextColor(list, GetSysColor(COLOR_WINDOWTEXT));
 	}
 
 	g_results = list;
@@ -606,6 +846,12 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_edit = nullptr;
 	g_results = nullptr;
 	g_shown.clear();
+	g_itemSections.clear();
+	g_sections.clear();
+	if (g_sectionFont) {
+		DeleteObject(g_sectionFont);
+		g_sectionFont = nullptr;
+	}
 	g_text.clear();
 	g_rows.clear();
 
@@ -631,6 +877,18 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 			g_rows.push_back(copy);
 		}
 	}
+	PutFixedAsymRowsFirst(g_rows);
+
+	for (const AsymRow& row : g_rows) {
+		if (row.fixed || FindSection(row.host) >= 0)
+			continue;
+		SectionState section;
+		section.host = row.host;
+		section.header = FindSectionHeader(row.host);
+		section.label = SectionLabel(row.host);
+		section.expanded = HasVisibleStyle(row.host);
+		g_sections.push_back(std::move(section));
+	}
 
 	if (g_rows.empty()) {
 		LogF("symmetrize: nenhuma linha encontrada, busca nao instalada");
@@ -641,6 +899,19 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	AddSearchBox(dlg);
 	AddResultsList(dlg);
+	if (!g_edit || !g_results) {
+		LogF("symmetrize: controles incompletos, deixando o dialogo original intacto");
+		if (g_edit && IsWindow(g_edit))
+			DestroyWindow(g_edit);
+		if (g_results && IsWindow(g_results))
+			DestroyWindow(g_results);
+		g_dialog = nullptr;
+		g_scroll = nullptr;
+		g_edit = nullptr;
+		g_results = nullptr;
+		g_rows.clear();
+		return;
+	}
 
 	// As colunas de cada linha, separadas agora.
 	//
@@ -650,6 +921,24 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	g_text.reserve(g_rows.size());
 	for (const AsymRow& row : g_rows)
 		g_text.push_back(SplitRow(row));
+
+	// Instale os observadores antes de tirar a original de cena. Se qualquer um
+	// falhar, os controles novos sao descartados e o dialogo segue intacto.
+	if (!SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0) ||
+		!SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0)) {
+		LogF("symmetrize: nao consegui observar o dialogo inteiro, deixando o original intacto");
+		RemoveWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId);
+		RemoveWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId);
+		DestroyWindow(g_edit);
+		DestroyWindow(g_results);
+		g_dialog = nullptr;
+		g_scroll = nullptr;
+		g_edit = nullptr;
+		g_results = nullptr;
+		g_text.clear();
+		g_rows.clear();
+		return;
+	}
 
 	// A original sai de cena aqui, antes de o dialogo aparecer pela primeira vez.
 	//
@@ -670,9 +959,22 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 	//
 	// O ponto forte nao e que eu saiba o que o wx faz. E que assim nao preciso
 	// saber.
-	if (HRGN empty = CreateRectRgn(0, 0, 0, 0)) {
-		// A regiao passa a ser do sistema; apaga-la aqui a tiraria da janela.
-		SetWindowRgn(scroll, empty, TRUE);
+	HRGN empty = CreateRectRgn(0, 0, 0, 0);
+	if (!empty || !SetWindowRgn(scroll, empty, TRUE)) {
+		if (empty)
+			DeleteObject(empty); // so passa a pertencer ao sistema quando SetWindowRgn funciona
+		LogF("symmetrize: nao consegui ocultar a lista original, deixando o dialogo intacto");
+		RemoveWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId);
+		RemoveWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId);
+		DestroyWindow(g_edit);
+		DestroyWindow(g_results);
+		g_dialog = nullptr;
+		g_scroll = nullptr;
+		g_edit = nullptr;
+		g_results = nullptr;
+		g_text.clear();
+		g_rows.clear();
+		return;
 	}
 
 	// Registrado com classe e nome: apagar a janela errada apagaria a moldura
@@ -683,8 +985,6 @@ void HandleAsymDialog(HWND dlg, HWND scroll) {
 
 	// E a nossa ja nasce cheia, entao o dialogo nunca e visto sem lista.
 	RefreshResults();
-	SetWindowSubclass(dlg, DialogSubclassProc, kDialogSubclassId, 0);
-	SetWindowSubclass(scroll, ScrollSubclassProc, kScrollSubclassId, 0);
 
 	// O layout so vale depois que o dialogo estiver montado: aqui ainda
 	// estamos dentro do WM_WINDOWPOSCHANGING que o exibe, e o retangulo da
@@ -856,6 +1156,33 @@ std::vector<AsymRow> GroupRowsByTop(HWND parent) {
 	return rows;
 }
 
+void PutFixedAsymRowsFirst(std::vector<AsymRow>& rows) {
+	std::stable_partition(rows.begin(), rows.end(),
+					  [](const AsymRow& row) { return row.fixed; });
+}
+
+bool ActivateAsymCheck(HWND check, bool checked) {
+	if (!check || !IsWindow(check))
+		return false;
+
+	const LRESULT wanted = checked ? BST_CHECKED : BST_UNCHECKED;
+	if (SendMessageW(check, BM_GETCHECK, 0, 0) == wanted)
+		return checked;
+
+	// BM_SETCHECK garante o estado exato, inclusive saindo de
+	// BST_INDETERMINATE. A notificacao separada e a parte que faz o wxWidgets
+	// executar o mesmo tratador usado por um clique real e recalcular as
+	// contagens do dialogo.
+	SendMessageW(check, BM_SETCHECK, wanted, 0);
+	if (HWND parent = GetParent(check)) {
+		SendMessageW(parent, WM_COMMAND,
+					 MAKEWPARAM(static_cast<WORD>(GetDlgCtrlID(check)), BN_CLICKED),
+					 reinterpret_cast<LPARAM>(check));
+	}
+
+	return SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
 HWND FindAsymScroll(HWND dlg) {
 	if (!dlg)
 		return nullptr;
@@ -945,6 +1272,8 @@ void Uninstall() {
 	g_maskSymVertId = 0;
 	g_symVertId = 0;
 	g_shown.clear();
+	g_itemSections.clear();
+	g_sections.clear();
 	g_text.clear();
 	g_rows.clear();
 }

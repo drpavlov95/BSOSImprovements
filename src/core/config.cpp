@@ -202,10 +202,6 @@ Config LoadConfig(const wchar_t* iniPath) {
 	if (strengthSteps > 0)
 		c.brushStrengthSteps = strengthSteps;
 
-	// Aqui zero e um valor legitimo: significa estabilizador desligado. Por
-	// isso nao ha filtro de "maior que zero" como no de cima.
-	c.stabilizerRadius = static_cast<int>(
-		GetPrivateProfileIntW(L"Tuning", L"StabilizerRadius", c.stabilizerRadius, iniPath));
 	c.remaps = ReadRemapSection(iniPath);
 	c.tooltipShortcuts = ReadKeySection(iniPath, L"TooltipShortcuts");
 

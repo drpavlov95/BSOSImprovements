@@ -99,7 +99,6 @@ struct Config {
 	//
 	// Comeca desligado pelo mesmo motivo da camera: ele nao acrescenta nada,
 	// ele muda como o pincel responde a mao de quem ja esta acostumado.
-	int stabilizerRadius = 0;
 
 	std::vector<RemapEntry> remaps;
 

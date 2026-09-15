@@ -199,7 +199,11 @@ TEST(FindsThePosePanelByItsShape) {
 	HWND boneList = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
 									10, 250, 100, 100, panel, nullptr,
 									GetModuleHandleW(nullptr), nullptr);
-	TEST_ASSERT(poseName != nullptr && boneList != nullptr);
+	HWND showPose = CreateWindowExW(0, L"BUTTON", L"Show Pose",
+									WS_CHILD | WS_VISIBLE | BS_CHECKBOX,
+									10, 200, 100, 20, panel, nullptr,
+									GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(poseName != nullptr && boneList != nullptr && showPose != nullptr);
 
 	// FindPosePanel procura entre os DESCENDENTES, entao o painel precisa de
 	// um pai para ser encontrado.
@@ -212,6 +216,7 @@ TEST(FindsThePosePanelByItsShape) {
 	TEST_ASSERT(found.ok);
 	TEST_ASSERT(found.panel == panel);
 	TEST_ASSERT(found.boneChoice == boneList);
+	TEST_ASSERT(found.showPose == showPose);
 
 	// As sete linhas saem em ordem vertical.
 	for (int i = 1; i < 7; ++i) {

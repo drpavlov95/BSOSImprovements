@@ -98,8 +98,27 @@ PosePanel FindPosePanel(HWND frame) {
 			}
 		}
 
+		for (HWND child : ChildrenOf(candidate)) {
+			if (_wcsicmp(ClassOf(child).c_str(), L"Button") != 0)
+				continue;
+			const LONG style = GetWindowLongW(child, GWL_STYLE);
+			const LONG type = style & BS_TYPEMASK;
+			// wxMSW pode criar wxCheckBox como BS_CHECKBOX ou
+			// BS_AUTOCHECKBOX, conforme a versao/tema do wxWidgets. Os dois
+			// representam o Show Pose e ambos sao a ancora valida.
+			if (type == BS_CHECKBOX || type == BS_AUTOCHECKBOX) {
+				out.showPose = child;
+				break;
+			}
+		}
+
 		if (!out.boneChoice) {
 			LogF("pose: achei o painel %p mas nenhuma lista de ossos dentro dele",
+				 static_cast<void*>(candidate));
+			continue;
+		}
+		if (!out.showPose) {
+			LogF("pose: achei o painel %p mas nao a caixa Show Pose",
 				 static_cast<void*>(candidate));
 			continue;
 		}

@@ -21,10 +21,9 @@
 // O botao direito continua girando. Tirar isso nao acrescentaria nada e
 // quebraria o habito de quem usa os dois programas.
 //
-// Nada e consumido nem sintetizado -- a mensagem original e reescrita e segue
-// pelo caminho de sempre. E o mesmo cuidado do resize de brush: engolir a
-// mensagem e mandar outra no lugar mata o tratamento interno que redesenha a
-// cena.
+// A mensagem original e reescrita e segue pelo caminho de sempre. Como o
+// Outfit Studio consulta o estado fisico do Shift para distinguir pan e zoom,
+// esse modificador tambem e temporariamente sintetizado durante o arrasto.
 namespace BlenderCamera {
 
 bool Install(HWND frame);

@@ -5,6 +5,17 @@
 
 namespace {
 
+int g_clickNotifications = 0;
+int g_lastClickId = 0;
+
+LRESULT CALLBACK NotifyHostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_COMMAND && HIWORD(wParam) == BN_CLICKED && lParam != 0) {
+		++g_clickNotifications;
+		g_lastClickId = LOWORD(wParam);
+	}
+	return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 HWND MakeHost(HWND parent, int x) {
 	static bool registered = false;
 	if (!registered) {
@@ -19,6 +30,20 @@ HWND MakeHost(HWND parent, int x) {
 	const DWORD style = parent ? (WS_CHILD | WS_VISIBLE) : WS_OVERLAPPEDWINDOW;
 	return CreateWindowExW(0, L"BSOSAsymHost", L"host", style, x, 0, 300, 500,
 						   parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+HWND MakeNotifyHost() {
+	static bool registered = false;
+	if (!registered) {
+		WNDCLASSW wc = {};
+		wc.lpfnWndProc = NotifyHostProc;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"BSOSAsymNotifyHost";
+		RegisterClassW(&wc);
+		registered = true;
+	}
+	return CreateWindowExW(0, L"BSOSAsymNotifyHost", L"host", WS_OVERLAPPEDWINDOW,
+						 0, 0, 300, 200, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 
 // Uma linha como o dialogo monta: caixa de marcacao, nome, media e contagem.
@@ -100,6 +125,58 @@ TEST(IgnoresPanelsWithoutChecks) {
 					0, 0, 60, 12, host, nullptr, GetModuleHandleW(nullptr), nullptr);
 	TEST_ASSERT(GroupRowsByTop(host).empty());
 	TEST_ASSERT(GroupRowsByTop(nullptr).empty());
+
+	DestroyWindow(host);
+	return true;
+}
+
+TEST(PutsAggregateAsymRowsAtTheTop) {
+	std::vector<AsymRow> rows(6);
+	rows[0].name = L"Slider A";
+	rows[1].name = L"Slider B";
+	rows[2].name = L"Position";
+	rows[2].fixed = true;
+	rows[3].name = L"Bone A";
+	rows[4].name = L"111 sliders";
+	rows[4].fixed = true;
+	rows[5].name = L"26 bones";
+	rows[5].fixed = true;
+
+	PutFixedAsymRowsFirst(rows);
+
+	TEST_ASSERT(rows[0].name == L"Position");
+	TEST_ASSERT(rows[1].name == L"111 sliders");
+	TEST_ASSERT(rows[2].name == L"26 bones");
+	TEST_ASSERT(rows[3].name == L"Slider A");
+	TEST_ASSERT(rows[4].name == L"Slider B");
+	TEST_ASSERT(rows[5].name == L"Bone A");
+	return true;
+}
+
+TEST(ActivatesRealChecksAndNotifiesTheirOwner) {
+	HWND host = MakeNotifyHost();
+	TEST_ASSERT(host != nullptr);
+	HWND check = CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | BS_AUTO3STATE,
+								 0, 0, 20, 20, host, reinterpret_cast<HMENU>(321),
+								 GetModuleHandleW(nullptr), nullptr);
+	TEST_ASSERT(check != nullptr);
+
+	g_clickNotifications = 0;
+	g_lastClickId = 0;
+	SendMessageW(check, BM_SETCHECK, BST_INDETERMINATE, 0);
+
+	TEST_ASSERT(!ActivateAsymCheck(check, false));
+	TEST_ASSERT(SendMessageW(check, BM_GETCHECK, 0, 0) == BST_UNCHECKED);
+	TEST_ASSERT(g_clickNotifications == 1);
+	TEST_ASSERT(g_lastClickId == 321);
+
+	TEST_ASSERT(ActivateAsymCheck(check, true));
+	TEST_ASSERT(SendMessageW(check, BM_GETCHECK, 0, 0) == BST_CHECKED);
+	TEST_ASSERT(g_clickNotifications == 2);
+
+	// Pedir o estado que ja esta aplicado nao produz um clique espurio.
+	TEST_ASSERT(ActivateAsymCheck(check, true));
+	TEST_ASSERT(g_clickNotifications == 2);
 
 	DestroyWindow(host);
 	return true;

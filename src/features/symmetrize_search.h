@@ -63,9 +63,8 @@ struct AsymRow {
 
 	// Linha de cabecalho do dialogo -- "Position", "114 sliders", "26 bones".
 	//
-	// Elas sao agregados: marcam varios de uma vez, e o XRC as declara com
-	// wxCHK_3STATE. Nao entram na lista de resultados, que e uma lista de
-	// itens; quem quer mexer nelas apaga a busca e a lista original volta.
+	// Elas sao agregados: marcam varios de uma vez, e o XRC declara as duas
+	// ultimas com wxCHK_3STATE. Ficam sempre no topo da lista de resultados.
 	bool fixed = false;
 };
 
@@ -75,6 +74,15 @@ struct AsymRow {
 // acompanhar a ordem de criacao, e agrupar errado juntaria o nome de uma linha
 // com a contagem de outra.
 std::vector<AsymRow> GroupRowsByTop(HWND parent);
+
+// Poe as linhas agregadas antes das linhas individuais, preservando a ordem
+// relativa dentro dos dois grupos.
+void PutFixedAsymRowsFirst(std::vector<AsymRow>& rows);
+
+// Leva um checkbox verdadeiro ao estado pedido e envia ao pai o mesmo
+// BN_CLICKED produzido por um clique. Exposto para testar inclusive os
+// checkboxes de tres estados usados nos agregados.
+bool ActivateAsymCheck(HWND check, bool checked);
 
 // A area que rola, entre os descendentes do dialogo: a janela MAIS FUNDA que
 // ainda carrega todas as caixas de marcacao. Nullptr se nenhuma tiver ao menos

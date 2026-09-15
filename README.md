@@ -1,7 +1,13 @@
 # BodySlide and OutfitStudio Improvements
 
-Interface improvements for **BodySlide and Outfit Studio**, shipped as a standalone DLL.
-No original file is modified or redistributed.
+Drop-in interface improvements for **BodySlide and Outfit Studio**, shipped as a
+standalone DLL. It adds faster list searching, safer pose editing, practical
+shortcuts and optional Blender-style navigation without replacing or redistributing
+the original executables.
+
+The distribution folder contains `msimg32.dll`, `BSOSImprovements.ini`, `README.txt`
+and `LICENSE.txt` at its root. Extract it directly into the folder that contains the
+BodySlide and Outfit Studio executables.
 
 ## What it does
 
@@ -17,6 +23,7 @@ hit OK with all of them selected.
 
 **Search in the "Batch Build" dialog.** A search box above the outfit list jumps to the
 first match as you type; `Enter` cycles through the rest, wrapping around at the end.
+**Toggle matching** flips the check mark for every outfit that matches the search.
 
 This one *jumps* rather than filtering, and that is deliberate: Batch Build reads which
 outfits to build straight from the list control, so hiding rows would change what gets
@@ -58,8 +65,8 @@ size without moving. Needs an active brush (keys `1`–`9`); with the Select too
 nothing.
 
 **`Shift+F` is the same drag for brush *strength*** — the other half of what Blender puts
-on those two keys. The circle does not change while you drag it, because strength is not
-a size; the value shows in the status bar instead.
+on those two keys. A small native-style strength bar appears above the brush cursor while
+dragging and disappears when the drag is confirmed or cancelled.
 
 One number here is a guess and is meant to be corrected: how many steps strength has from
 end to end. The size has 300 and that is in Outfit Studio's own code, but strength is not
@@ -76,10 +83,9 @@ parentheses — *"Shows a transform tool. **(K)**"*. The key is not hardcoded: i
 from the menu entry of the same command, which is why it survives translations and why
 it says `K` and not `F` once the `[Remap]` below has moved Transform out of the way.
 
-Tools whose key lives only inside Outfit Studio's own code — the digits that switch
-brushes — have nothing to read, so they show nothing. If you want them labelled anyway,
-list them under `[TooltipShortcuts]` in the INI. Turn the log on and the mod prints how
-many tools it found with and without a shortcut.
+The brush digits are handled inside Outfit Studio rather than in its menu, so the shipped
+INI labels them explicitly (`1` Select, `2` Mask, `3` Inflate, `4` Deflate, `5` Move,
+`6` Smooth). You can change or remove those labels under `[TooltipShortcuts]`.
 
 **Search in the "Symmetrize Vertices" dialog.** That dialog (and its twin, "Mask
 Symmetric Vertices") lists one row per slider and one per bone, which on a real project
@@ -90,8 +96,9 @@ contract as the Choose Groups search. Clearing the box brings everything back. T
 closes its own gaps because the hiding is done in a way wxWidgets understands, so the
 scrollbar stays honest.
 
-**Mirror bone pose.** Move the right thigh in pose mode and the left one follows, by the
-same amount, with the sign flipped on the axes that mirror.
+**Mirror bone pose.** Enable **Mirror pose** beside **Show Pose**, then move a left/right
+bone in pose mode and its counterpart follows by the same amount, with the sign flipped
+on the configured axes.
 
 It fires when you let go of the slider, not while you drag it. Mirroring works by
 switching the bone list to the other bone, writing there, and switching back — doing that
@@ -103,17 +110,6 @@ Which axes flip is a `[MirrorPose]` setting, because there is no universal answe
 depends on how your skeleton orients each bone's local axes. The defaults are the Skyrim
 convention. If a mirrored pose bends the wrong way, flip one line and reload; with the
 log on, the mod prints the values it wrote.
-
-**Stroke stabilizer** *(off by default)*. Blender's *Stabilize Stroke*: the brush hangs
-from the cursor on a rope. While the cursor moves *inside* that radius the brush does not
-move at all — which is where hand tremor dies, because tremor is small movement. Past the
-radius the cursor drags the brush along, always trailing by exactly that much.
-
-Set `[Tuning] StabilizerRadius` to something between 20 and 40 pixels to try it. It only
-acts during a stroke — left button held over the 3D view — and only when the tool in your
-hand is a brush; with the Select tool the left button moves the camera, and lagging that
-would be a defect rather than a help. The mod knows which tool is active by reading the
-check mark off the **Tool ▸ Current Tool** menu, which is a radio group.
 
 **Reorder sliders by dragging.** Press on the **background** of a slider row and drag it
 where you want. The pencil still enters edit mode, the checkbox still ticks, the bar still
@@ -163,17 +159,17 @@ way, the DLL goes right next to it — host detection matches the name, not the 
 **One copy covers both programs.** The Outfit Studio executable lives in that same folder
 and has no folder of its own, so there is no second copy to make.
 
-**Mod Organizer 2 — do not install this as a separate mod.** MO2's VFS maps mods into
-the game's `Data` folder, never into another mod's folder, so a standalone mod would
-never be loaded. Do one of these instead:
+**Do not install this archive as a normal standalone MO2 or Vortex mod.** Their virtual
+filesystem targets the game's `Data` folder; Windows needs this proxy DLL in the real
+executable directory. Open the installed BodySlide mod/folder and extract or copy the
+archive contents directly into the directory containing `BodySlide.exe`/
+`BodySlide x64.exe` and `OutfitStudio.exe`. With a typical MO2 installation, that
+destination is:
 
-- install the archive **over** your "BodySlide and Outfit Studio" mod, choosing to merge
-  when MO2 asks; or
-- copy the two files straight into
-  `mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\`.
+`mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\`
 
-**Vortex or manual:** extract the archive contents into the folder containing
-`BodySlide x64.exe`, so that `msimg32.dll` ends up beside it.
+For a manual BodySlide installation, extract the archive directly into the folder
+containing those executables. Do not create another `CalienteTools` folder there.
 
 Launching BodySlide through MO2 keeps working normally — MO2 starts the executable from
 its real path, which is exactly where the DLL lives.

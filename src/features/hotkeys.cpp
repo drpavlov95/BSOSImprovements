@@ -14,7 +14,6 @@
 #include "features/registry.h"
 #include "features/slider_menu.h"
 #include "features/slider_reorder.h"
-#include "features/stroke_stabilizer.h"
 #include "features/zero_sliders.h"
 #include "win32/menu_toggle.h"
 #include "win32/winfind.h"
@@ -154,12 +153,9 @@ LRESULT CALLBACK GetMsgProc(int code, WPARAM wParam, LPARAM lParam) {
 	// brush: la o modo e exclusivo e o mouse ja tem dono.
 	//
 	// A camera vem primeiro porque ela pode trocar a IDENTIDADE da mensagem --
-	// botao do meio virando botao direito. O estabilizador so mexe em
-	// coordenada, e precisa ver a mensagem ja com o botao final: um traco de
-	// pincel e o botao esquerdo, e o que a camera produz nunca e esse.
+	// botao do meio virando botao direito.
 	if (!BrushResize::IsActive()) {
 		BlenderCamera::RewriteMouseMessage(msg);
-		StrokeStabilizer::RewriteStrokeMessage(msg);
 	}
 
 	// O reorder consome uma mensagem so: o Esc que cancela um arrasto em curso.
@@ -249,7 +245,7 @@ bool HotkeysEnabled(const Config& cfg) {
 	// A camera aparece no menu mesmo desligada, mas so se o modulo rodar. Quem
 	// desligou tudo continua sem nada -- inclusive sem o item de menu.
 	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
-		   cfg.blenderCamera || cfg.zeroSlidersHotkey || cfg.stabilizerRadius > 0 ||
+		   cfg.blenderCamera || cfg.zeroSlidersHotkey ||
 		   cfg.sliderReorder || cfg.dumpWindows || !cfg.remaps.empty();
 }
 
@@ -312,7 +308,6 @@ bool Install(HWND frame) {
 	// ou seja: para achar a opcao voce precisava ja saber que ela existia. O
 	// item aparece desmarcado e nao muda nada ate ser clicado.
 	const bool camera = outfitStudio && BlenderCamera::Install(frame);
-	const bool stabilizer = outfitStudio && StrokeStabilizer::Install(frame);
 	const bool reorder = outfitStudio && cfg.sliderReorder && SliderReorder::Install(frame);
 
 	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))
@@ -335,10 +330,9 @@ bool Install(HWND frame) {
 		}
 	}
 
-	// A camera e o estabilizador nao usam binding de tecla: eles reescrevem
-	// mensagens de mouse. Sem esta parte, ligar so um dos dois nao instalaria o
-	// hook e nenhum funcionaria.
-	if (g_bindings.empty() && !camera && !stabilizer && !reorder) {
+	// A camera nao usa binding de tecla: ela reescreve mensagens de mouse. Sem
+	// esta parte, ligar somente a camera nao instalaria o hook.
+	if (g_bindings.empty() && !camera && !reorder) {
 		LogF("hotkeys: nenhum atalho configurado");
 		return false;
 	}
@@ -362,7 +356,6 @@ void Uninstall() {
 	}
 	BrushResize::Uninstall();
 	BlenderCamera::Uninstall();
-	StrokeStabilizer::Uninstall();
 	SliderReorder::Uninstall();
 	MenuToggle::RemoveAll();
 	ZeroSliders::Uninstall();

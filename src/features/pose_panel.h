@@ -22,6 +22,11 @@ struct PosePanel {
 	// wxChoice vira CBS_DROPDOWNLIST, sem campo de digitacao.
 	HWND boneChoice = nullptr;
 
+	// cbPose: a caixa "Show Pose". O mirror usa a sua posicao como ancora para
+	// entrar naturalmente na mesma linha, sem criar uma janela solta por cima
+	// do painel de pose.
+	HWND showPose = nullptr;
+
 	// De cima para baixo, na ordem em que o XRC os empilha:
 	// rotacao X, Y, Z, deslocamento X, Y, Z, escala.
 	HWND sliders[7] = {};

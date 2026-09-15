@@ -131,6 +131,22 @@ TEST(DragModeIsDecidedAtThePress) {
 	return true;
 }
 
+TEST(AFreshPressCanNeverAccumulateCameraModes) {
+	CameraState state;
+
+	Run(state, WM_MBUTTONDOWN, MK_MBUTTON | MK_SHIFT);
+	TEST_ASSERT(state.panning && !state.orbiting && !state.zooming);
+
+	// Mesmo diante de uma sequencia duplicada/anormal de mensagens, o novo
+	// aperto substitui o modo anterior em vez de deixar pan e zoom ativos.
+	Run(state, WM_MBUTTONDOWN, MK_MBUTTON | MK_CONTROL);
+	TEST_ASSERT(state.zooming && !state.orbiting && !state.panning);
+
+	Run(state, WM_MBUTTONDOWN, MK_MBUTTON);
+	TEST_ASSERT(state.orbiting && !state.panning && !state.zooming);
+	return true;
+}
+
 TEST(LeavesEverythingElseAlone) {
 	CameraState state;
 

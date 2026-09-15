@@ -2,12 +2,14 @@
 
 #include <commctrl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <string>
 
 #include "core/host.h"
 #include "core/log.h"
+#include "core/theme.h"
 #include "core/ui_thread.h"
 #include "features/slider_menu.h"
 #include "win32/winfind.h"
@@ -26,10 +28,17 @@ int g_anchorScreenX = 0;
 int g_anchorScreenY = 0;
 int g_applied = 0;
 int g_jitter = 0;
+bool g_cuePosted = false;
 
 HWND g_frame = nullptr;
 HWND g_canvas = nullptr; // o wxGLCanvas, fixado na instalacao
 POINT g_anchorClient = {}; // a ancora em coordenadas do canvas
+HWND g_cueWindow = nullptr; // overlay transparente do indicador de forca
+bool g_cueClassRegistered = false;
+bool g_cueVisible = false;
+bool g_cueUpdateErrorLogged = false;
+int g_lastCuePercent = -1;
+bool g_cueDark = false;
 
 // Ids lidos uma unica vez na instalacao. Reler o menu a cada passo, alem de
 // caro -- um arrasto de ponta a ponta sao 300 passos -- se mostrou pouco
@@ -68,6 +77,183 @@ const char* TargetName() {
 HWND g_statusBar = nullptr;
 volatile LONG g_paintCount = 0;
 const UINT_PTR kCanvasSubclassId = 0xB507;
+constexpr UINT kDrawCueMessage = WM_APP + 0x507;
+constexpr wchar_t kCueClassName[] = L"BSOSImprovements_StrengthCue";
+constexpr int kCueWidth = 188;
+constexpr int kCueHeight = 38;
+constexpr int kCueGapAboveAnchor = 72;
+
+bool ReadStrengthPercent(int& percent) {
+	if (!g_statusBar || !IsWindow(g_statusBar))
+		return false;
+	const int panels = static_cast<int>(SendMessageW(g_statusBar, SB_GETPARTS, 0, 0));
+	for (int i = 0; i < panels && i < 8; ++i) {
+		wchar_t text[128] = {};
+		SendMessageW(g_statusBar, SB_GETTEXTW, static_cast<WPARAM>(i),
+					 reinterpret_cast<LPARAM>(text));
+		if (wcsncmp(text, L"Str:", 4) != 0)
+			continue;
+		wchar_t* end = nullptr;
+		const double value = wcstod(text + 4, &end);
+		if (end == text + 4 || !std::isfinite(value))
+			return false;
+		percent = std::clamp(static_cast<int>(std::lround(value * 100.0)), 0, 100);
+		return true;
+	}
+	return false;
+}
+
+int CuePercent() {
+	int percent = 0;
+	if (ReadStrengthPercent(percent))
+		return percent;
+	const int maxSteps = MaxSteps();
+	if (maxSteps <= 0)
+		return 0;
+	const double fallback = 50.0 + 50.0 * static_cast<double>(g_applied) / maxSteps;
+	return std::clamp(static_cast<int>(std::lround(fallback)), 0, 100);
+}
+
+void PaintStrengthBar(HDC dc, int percent) {
+	const COLORREF keyColor = RGB(255, 0, 255);
+	RECT whole = {0, 0, kCueWidth, kCueHeight};
+	HBRUSH key = CreateSolidBrush(keyColor);
+	FillRect(dc, &whole, key);
+	DeleteObject(key);
+
+	// Aparencia deliberadamente nativa: as mesmas cores e a mesma fonte que
+	// os controles Win32/wxWidgets do Outfit Studio recebem do Windows.
+	RECT panel = {0, 0, kCueWidth, kCueHeight};
+	HBRUSH panelBrush = g_cueDark ? EditBackgroundBrush() : GetSysColorBrush(COLOR_BTNFACE);
+	FillRect(dc, &panel, panelBrush);
+	HBRUSH borderBrush = g_cueDark ? DarkBackgroundBrush() : GetSysColorBrush(COLOR_3DSHADOW);
+	FrameRect(dc, &panel, borderBrush);
+
+	HGDIOBJ oldFont = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+	SetBkMode(dc, TRANSPARENT);
+	SetTextColor(dc, g_cueDark ? kDarkText : GetSysColor(COLOR_BTNTEXT));
+	wchar_t label[32] = {};
+	swprintf_s(label, L"Strength: %d%%", percent);
+	RECT textRect = {7, 2, kCueWidth - 7, 19};
+	DrawTextW(dc, label, -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+	SelectObject(dc, oldFont);
+
+	RECT track = {7, 23, kCueWidth - 7, 31};
+	FillRect(dc, &track, borderBrush);
+	InflateRect(&track, -1, -1);
+	FillRect(dc, &track, g_cueDark ? DarkBackgroundBrush() : GetSysColorBrush(COLOR_WINDOW));
+	RECT fill = track;
+	fill.right = fill.left + (fill.right - fill.left) * percent / 100;
+	if (fill.right > fill.left) {
+		HBRUSH red = CreateSolidBrush(RGB(220, 45, 45));
+		FillRect(dc, &fill, red);
+		DeleteObject(red);
+	}
+}
+
+LRESULT CALLBACK CueWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_NCHITTEST)
+		return HTTRANSPARENT;
+	if (msg == WM_MOUSEACTIVATE)
+		return MA_NOACTIVATE;
+	if (msg == WM_ERASEBKGND)
+		return 1;
+	if (msg == WM_PAINT) {
+		PAINTSTRUCT ps = {};
+		BeginPaint(hwnd, &ps);
+		EndPaint(hwnd, &ps);
+		return 0;
+	}
+	return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool EnsureCueWindow() {
+	if (!g_frame || !IsWindow(g_frame) || !g_canvas || !IsWindow(g_canvas))
+		return false;
+	if (!g_cueClassRegistered) {
+		WNDCLASSW wc = {};
+		wc.lpfnWndProc = CueWindowProc;
+		wc.hInstance = SelfModule();
+		wc.lpszClassName = kCueClassName;
+		if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+			return false;
+		g_cueClassRegistered = true;
+	}
+	if (g_cueWindow && IsWindow(g_cueWindow))
+		return true;
+	g_cueWindow = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE |
+			WS_EX_TOOLWINDOW,
+			kCueClassName, L"", WS_POPUP, 0, 0, kCueWidth, kCueHeight,
+			g_frame, nullptr, SelfModule(), nullptr);
+	if (!g_cueWindow)
+		return false;
+	ShowWindow(g_cueWindow, SW_HIDE);
+	LogF("brush forca: barra visual criada hwnd=%p", static_cast<void*>(g_cueWindow));
+	return true;
+}
+
+void UpdateStrengthCue() {
+	const bool visible = g_active && IsStrength();
+	if (!visible) {
+		if (g_cueWindow && IsWindow(g_cueWindow) && g_cueVisible)
+			ShowWindow(g_cueWindow, SW_HIDE);
+		g_cueVisible = false;
+		g_lastCuePercent = -1;
+		return;
+	}
+	if (!EnsureCueWindow())
+		return;
+	const int percent = CuePercent();
+	if (g_cueVisible && percent == g_lastCuePercent)
+		return;
+	g_lastCuePercent = percent;
+
+	RECT canvas = {};
+	GetWindowRect(g_canvas, &canvas);
+	int x = g_anchorScreenX - kCueWidth / 2;
+	int y = g_anchorScreenY - kCueHeight - kCueGapAboveAnchor;
+	const int maxX = (std::max)(canvas.left, canvas.right - kCueWidth);
+	const int maxY = (std::max)(canvas.top, canvas.bottom - kCueHeight);
+	x = (std::clamp)(x, static_cast<int>(canvas.left), maxX);
+	y = (std::clamp)(y, static_cast<int>(canvas.top), maxY);
+
+	HDC screen = GetDC(nullptr);
+	HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
+	HBITMAP bitmap = screen ? CreateCompatibleBitmap(screen, kCueWidth, kCueHeight) : nullptr;
+	if (!screen || !memory || !bitmap) {
+		if (bitmap) DeleteObject(bitmap);
+		if (memory) DeleteDC(memory);
+		if (screen) ReleaseDC(nullptr, screen);
+		return;
+	}
+	HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+	PaintStrengthBar(memory, percent);
+	POINT destination = {x, y};
+	POINT source = {0, 0};
+	SIZE size = {kCueWidth, kCueHeight};
+	const BOOL updated = UpdateLayeredWindow(g_cueWindow, screen, &destination, &size,
+			memory, &source, RGB(255, 0, 255), nullptr, ULW_COLORKEY);
+	const DWORD updateError = updated ? ERROR_SUCCESS : GetLastError();
+	SelectObject(memory, oldBitmap);
+	DeleteObject(bitmap);
+	DeleteDC(memory);
+	ReleaseDC(nullptr, screen);
+	if (!updated) {
+		if (!g_cueUpdateErrorLogged) {
+			LogF("brush forca: UpdateLayeredWindow falhou (%lu)", updateError);
+			g_cueUpdateErrorLogged = true;
+		}
+		return;
+	}
+	if (!g_cueVisible) {
+		ShowWindow(g_cueWindow, SW_SHOWNOACTIVATE);
+		g_cueVisible = true;
+	}
+}
+
+void DrawStrengthCue(HWND) {
+	UpdateStrengthCue();
+}
 
 // Le o painel 2 da barra de status, onde o OnIncBrush escreve "Rad: %f". E a
 // unica forma, de fora, de saber se o comando de brush surtiu efeito -- separa
@@ -105,6 +291,12 @@ void LogAllStatusPanels() {
 void ExitBecauseCaptureLost();
 
 LRESULT CALLBACK CanvasSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+	if (msg == kDrawCueMessage) {
+		g_cuePosted = false;
+		DrawStrengthCue(hwnd);
+		return 0;
+	}
+
 	if (msg == WM_PAINT)
 		InterlockedIncrement(&g_paintCount);
 
@@ -165,6 +357,10 @@ void ExitBecauseCaptureLost() {
 	g_active = false;
 	LogF("brush %s: captura perdida, modo encerrado (%+d passos mantidos)", TargetName(), g_applied);
 	g_applied = 0;
+	g_cuePosted = false;
+	UpdateStrengthCue();
+	if (g_canvas && IsWindow(g_canvas))
+		RedrawWindow(g_canvas, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
 void Redraw() {
@@ -257,6 +453,7 @@ bool Install(HWND frame) {
 	RunOnUiThread(frame, InstallCanvasCounter, nullptr);
 
 	g_statusBar = FindDescendantByClass(frame, STATUSCLASSNAMEW);
+	g_cueDark = DetectAppearance(AppDir()) == Appearance::Dark;
 
 	LogF("brush_resize: pronto (canvas=%p, statusbar=%p, aumentar=%u diminuir=%u)",
 		 static_cast<void*>(g_canvas), static_cast<void*>(g_statusBar), g_increaseId, g_decreaseId);
@@ -268,8 +465,15 @@ void Uninstall() {
 		ReleaseCapture();
 	if (g_canvas && IsWindow(g_canvas))
 		RemoveWindowSubclass(g_canvas, CanvasSubclassProc, kCanvasSubclassId);
+	if (g_cueWindow && IsWindow(g_cueWindow))
+		DestroyWindow(g_cueWindow);
+	g_cueWindow = nullptr;
+	g_cueVisible = false;
+	g_cueUpdateErrorLogged = false;
+	g_lastCuePercent = -1;
 	g_active = false;
 	g_applied = 0;
+	g_cuePosted = false;
 	g_frame = nullptr;
 	g_canvas = nullptr;
 	g_increaseId = 0;
@@ -294,6 +498,9 @@ void Begin(int anchorScreenX, int anchorScreenY, Target target) {
 	g_anchorScreenX = anchorScreenX;
 	g_anchorScreenY = anchorScreenY;
 	g_applied = 0;
+	g_cuePosted = false;
+	g_cueUpdateErrorLogged = false;
+	g_lastCuePercent = -1;
 
 	// Converte a ancora uma unica vez, enquanto o ponteiro ainda esta onde a
 	// tecla foi apertada.
@@ -312,6 +519,10 @@ void Begin(int anchorScreenX, int anchorScreenY, Target target) {
 		 anchorScreenX, anchorScreenY, g_anchorClient.x, g_anchorClient.y, ReadRadius().c_str());
 	if (IsStrength())
 		LogAllStatusPanels();
+	if (IsStrength()) {
+		Redraw();
+		UpdateStrengthCue();
+	}
 }
 
 void RewriteMouseMove(MSG* msg) {
@@ -340,8 +551,15 @@ void RewriteMouseMove(MSG* msg) {
 
 	// Cinto e suspensorio: forca a pintura tambem por conta propria, para nao
 	// depender so do caminho interno do app.
-	if (g_canvas && IsWindow(g_canvas))
+	if (g_canvas && IsWindow(g_canvas)) {
 		RedrawWindow(g_canvas, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+		// O app ainda vai processar o WM_MOUSEMOVE depois que o hook retornar e
+		// pode trocar o backbuffer outra vez. Um redraw postado fica na fila para
+		// depois desse processamento, garantindo que o cue seja o ultimo desenho.
+		if (IsStrength() && !g_cuePosted) {
+			g_cuePosted = PostMessageW(g_canvas, kDrawCueMessage, 0, 0) != FALSE;
+		}
+	}
 }
 
 void Confirm() {
@@ -350,11 +568,13 @@ void Confirm() {
 	g_active = false;
 	if (GetCapture() == g_canvas)
 		ReleaseCapture();
+	UpdateStrengthCue();
 	// Um resumo por arrasto, nao um por movimento: cada LogF abre e fecha o
 	// arquivo, e um arrasto gera centenas de mensagens.
 	LogF("brush %s: confirmado (%+d passos, %ls, %ld repaints)", TargetName(), g_applied,
 		 ReadRadius().c_str(), g_paintCount);
 	g_applied = 0;
+	g_cuePosted = false;
 	Redraw();
 }
 
@@ -365,8 +585,10 @@ void Cancel() {
 	g_active = false;
 	if (GetCapture() == g_canvas)
 		ReleaseCapture();
+	UpdateStrengthCue();
 	LogF("brush %s: cancelado, valor restaurado", TargetName());
 	g_applied = 0;
+	g_cuePosted = false;
 	Redraw();
 }
 

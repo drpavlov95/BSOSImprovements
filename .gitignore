@@ -7,6 +7,7 @@ dist/
 *.lib
 .vs/
 dist-package/
+release/
 
 # Fixture do proprio BodySlide, que e GPL-3.0: nao redistribuido aqui. O teste
 # que usa ele se declara pulado se o arquivo nao estiver presente.

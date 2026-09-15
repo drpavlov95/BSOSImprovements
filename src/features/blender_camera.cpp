@@ -21,6 +21,11 @@ UINT g_commandId = 0;
 bool g_enabled = false;
 bool g_installed = false;
 CameraState g_state;
+constexpr UINT kClearShiftMessage = WM_APP + 0x508;
+
+bool IsDragging() {
+	return g_state.orbiting || g_state.panning || g_state.zooming;
+}
 
 // O Shift que nos mesmos apertamos ou soltamos.
 //
@@ -46,6 +51,19 @@ void SendShift(bool down) {
 	SendInput(1, &input, sizeof(input));
 }
 
+// wxWidgets pode consultar GetKeyState (estado da fila da thread) enquanto o
+// SendInput altera o estado global de forma assincrona. Atualizar os dois evita
+// um frame em que o Shift ainda parece apertado e o pan vaza para zoom.
+void SetThreadShiftState(bool down) {
+	BYTE keys[256] = {};
+	if (!GetKeyboardState(keys))
+		return;
+	const BYTE high = down ? 0x80 : 0x00;
+	for (const int vk : {VK_SHIFT, VK_LSHIFT, VK_RSHIFT})
+		keys[vk] = static_cast<BYTE>((keys[vk] & 0x01) | high);
+	SetKeyboardState(keys);
+}
+
 // Desfaz o que apertamos. O que SOLTAMOS nao e desfeito de proposito.
 //
 // Se o usuario ainda segura o Shift, o sistema o ve solto ate ele soltar de
@@ -53,8 +71,10 @@ void SendShift(bool down) {
 // vez disso reapertassemos, e ele ja tivesse soltado no meio do arrasto,
 // ficaria um Shift preso no sistema inteiro, que e muito pior.
 void ClearShiftOverride() {
-	if (g_shiftOverride == ShiftOverride::Pressed)
+	if (g_shiftOverride == ShiftOverride::Pressed) {
 		SendShift(false);
+		SetThreadShiftState(false);
+	}
 	g_shiftOverride = ShiftOverride::None;
 }
 
@@ -70,10 +90,16 @@ void ClearShiftOverride() {
 void HoldShiftOverride() {
 	const bool down = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
-	if (g_shiftOverride == ShiftOverride::Released && down)
-		SendShift(false);
-	else if (g_shiftOverride == ShiftOverride::Pressed && !down)
-		SendShift(true);
+	if (g_shiftOverride == ShiftOverride::Released) {
+		if (down)
+			SendShift(false);
+		SetThreadShiftState(false);
+	}
+	else if (g_shiftOverride == ShiftOverride::Pressed) {
+		if (!down)
+			SendShift(true);
+		SetThreadShiftState(true);
+	}
 }
 
 // O interruptor do menu chama isto.
@@ -96,6 +122,10 @@ bool TranslateCameraMessage(CameraState& state, UINT& message, WPARAM& wParam) {
 	switch (message) {
 		case WM_MBUTTONDOWN:
 		case WM_MBUTTONDBLCLK: {
+			// Cada aperto decide exatamente um modo. Alem de documentar a
+			// invariavel, isto impede mensagens duplicadas de acumularem dois
+			// estados ao mesmo tempo.
+			state = CameraState();
 			// Ctrl+meio e o zoom do Blender. No Outfit Studio o zoom fino e
 			// Shift+meio, entao um modificador vira o outro.
 			if (wParam & MK_CONTROL) {
@@ -167,6 +197,8 @@ bool TranslateCameraMessage(CameraState& state, UINT& message, WPARAM& wParam) {
 
 namespace BlenderCamera {
 
+void EndStuckDrag();
+
 bool Install(HWND frame) {
 	Uninstall();
 	g_frame = frame;
@@ -196,6 +228,8 @@ bool Install(HWND frame) {
 }
 
 void Uninstall() {
+	if (IsDragging() && g_canvas && IsWindow(g_canvas))
+		EndStuckDrag();
 	// Quem tira os itens do menu e o proprio modulo de toggle: ele conhece
 	// todos, inclusive os das outras features, e tira o separador junto.
 	g_frame = nullptr;
@@ -211,6 +245,8 @@ bool IsEnabled() {
 }
 
 void SetEnabled(bool enabled) {
+	if (!enabled && IsDragging() && g_canvas && IsWindow(g_canvas))
+		EndStuckDrag();
 	g_enabled = enabled;
 	// Sair no meio de um arrasto deixaria o estado preso em "orbitando", e a
 	// partir dai todo movimento do mouse viria com o botao trocado.
@@ -224,7 +260,7 @@ void SetEnabled(bool enabled) {
 // botao direito esta pressionado, mesmo com o nosso estado ja limpo.
 void EndStuckDrag() {
 	const UINT closing = g_state.orbiting ? WM_RBUTTONUP : WM_MBUTTONUP;
-	ClearShiftOverride();
+	const WPARAM closingKeys = g_shiftOverride == ShiftOverride::Pressed ? MK_SHIFT : 0;
 	g_state = CameraState();
 
 	POINT cursor = {};
@@ -233,21 +269,45 @@ void EndStuckDrag() {
 
 	// Postada e nao enviada: estamos dentro do hook de mensagens, e a ordem
 	// natural e esta chegar depois da mensagem que esta sendo tratada agora.
-	PostMessageW(g_canvas, closing, 0,
+	PostMessageW(g_canvas, closing, closingKeys,
 				 MAKELPARAM(static_cast<WORD>(cursor.x), static_cast<WORD>(cursor.y)));
+	PostMessageW(g_canvas, kClearShiftMessage, 0, 0);
 	LogF("camera blender: o botao foi solto fora da janela, arrasto encerrado");
 }
 
 void RewriteMouseMessage(MSG* msg) {
-	if (!g_enabled || !msg || !g_canvas)
+	if (!msg)
+		return;
+	if (msg->message == kClearShiftMessage) {
+		ClearShiftOverride();
+		msg->message = WM_NULL;
+		msg->wParam = 0;
+		msg->lParam = 0;
+		return;
+	}
+	if (!g_enabled || !g_canvas)
 		return;
 
 	// Fora da view 3D nada e traduzido -- MENOS o fim de um arrasto que ja
 	// comecou. Se o botao for solto com o ponteiro em outra janela e essa
 	// mensagem for ignorada, o estado fica preso em "orbitando" para sempre.
-	const bool dragging = g_state.orbiting || g_state.panning || g_state.zooming;
+	const bool dragging = IsDragging();
 	if (msg->hwnd != g_canvas && !dragging)
 		return;
+	if (msg->hwnd != g_canvas) {
+		// Nunca reescreva mouse sobre outro controle. Se a captura foi perdida,
+		// finalize o drag no canvas; enquanto o botao ainda estiver pressionado,
+		// apenas mantenha o modificador coerente e aguarde o fim.
+		if (msg->message == WM_MBUTTONUP ||
+			DragWasReleasedOutside(g_state, msg->message,
+				(GetKeyState(VK_MBUTTON) & 0x8000) != 0)) {
+			EndStuckDrag();
+		}
+		else if (msg->message == WM_MOUSEMOVE && g_shiftOverride != ShiftOverride::None) {
+			HoldShiftOverride();
+		}
+		return;
+	}
 
 	// O caso em que nem a mensagem de soltar chega: ela foi para outro
 	// processo. Ai o unico sinal e a tecla nao estar mais apertada.
@@ -282,11 +342,13 @@ void RewriteMouseMessage(MSG* msg) {
 			// Pan e o meio SEM Shift. O usuario segura Shift, entao soltamos.
 			g_shiftOverride = ShiftOverride::Released;
 			SendShift(false);
+			SetThreadShiftState(false);
 			LogF("camera blender: pan -- Shift solto no sistema durante o arrasto");
 		} else if (g_state.zooming) {
 			// Zoom e o meio COM Shift. O usuario segura Ctrl, entao apertamos.
 			g_shiftOverride = ShiftOverride::Pressed;
 			SendShift(true);
+			SetThreadShiftState(true);
 			LogF("camera blender: zoom -- Shift apertado no sistema durante o arrasto");
 		}
 	}
@@ -298,8 +360,12 @@ void RewriteMouseMessage(MSG* msg) {
 		HoldShiftOverride();
 
 	// Fim do arrasto: o teclado volta a ser do usuario.
-	if (wasDragging && !g_state.orbiting && !g_state.panning && !g_state.zooming)
-		ClearShiftOverride();
+	if (wasDragging && !IsDragging()) {
+		// A mensagem de soltar ainda nao foi entregue ao Outfit Studio. Para o
+		// zoom, ele precisa continuar vendo Shift ate processar esse evento.
+		// Uma mensagem logo depois faz a limpeza sem antecipar o teclado.
+		PostMessageW(g_canvas, kClearShiftMessage, 0, 0);
+	}
 }
 
 } // namespace BlenderCamera

@@ -1,8 +1,13 @@
 BodySlide and OutfitStudio Improvements
 =======================================
 
-Interface improvements for BodySlide and Outfit Studio.
-Nothing in the original install is modified or replaced.
+Drop-in interface improvements for BodySlide and Outfit Studio, shipped as a
+standalone DLL. It adds faster list searching, safer pose editing, practical
+shortcuts and optional Blender-style navigation without replacing or redistributing
+the original executables.
+
+The distribution contains msimg32.dll, BSOSImprovements.ini, README.txt and
+LICENSE.txt at its root.
 
 
 WHAT IT DOES
@@ -15,10 +20,11 @@ BodySlide
   of them selected.
 
   A search box in the "Batch Build" dialog. This one jumps to the first match
-  as you type instead of filtering -- Enter cycles through the rest. It jumps
+  as you type instead of filtering -- Enter cycles through the rest. "Toggle
+  matching" flips the check mark for every outfit that matches. It jumps
   rather than hides because Batch Build reads what to build from the list
   itself, so hiding rows would change the result. Your checkboxes are left
-  exactly as you set them.
+  exactly as you set them unless you press that button.
 
   Z zeroes every slider in the panel at once. There is no undo for this in
   BodySlide -- if you keep hitting it by accident, set ZeroSliders=Alt+Z.
@@ -39,8 +45,9 @@ Outfit Studio
   click to confirm. Esc or right click cancels. The circle stays put while
   you drag. Needs an active brush (keys 1-9).
 
-  Shift+F: the same drag for strength. The circle does not change, because
-  strength is not a size -- the value shows in the status bar.
+  Shift+F: the same drag for strength. A small native-style strength bar
+  appears above the brush cursor while dragging and disappears when the drag
+  is confirmed or cancelled.
 
   How many steps strength has is a guess in [Tuning] BrushStrengthSteps,
   default 100, because that number is not written in any file the mod can
@@ -52,27 +59,22 @@ Outfit Studio
   Toolbar tooltips now say the shortcut in parentheses -- "Shows a transform
   tool. (K)". The key is read from the matching menu entry, so it follows
   translations and stays right after a [Remap]. Buttons whose key lives only
-  inside Outfit Studio's code -- the digits that switch brushes -- show
-  nothing; label them yourself under [TooltipShortcuts] if you want them.
+  inside Outfit Studio's code -- the brush digits -- are labelled in the
+  shipped INI: 1 Select, 2 Mask, 3 Inflate, 4 Deflate, 5 Move, 6 Smooth.
+  You can change or remove those labels under [TooltipShortcuts].
 
   A search box in the "Symmetrize Vertices" dialog (and in its twin, "Mask
   Symmetric Vertices"), which lists one row per slider and one per bone. The
   filter only hides rows: a hidden row keeps its check mark, and clearing the
   box brings everything back.
 
-  Mirror bone pose. Move the right thigh in pose mode and the left one
-  follows, same amount, sign flipped on the axes that mirror. It happens when
-  you release the slider, not while dragging. Bones with no side -- Root,
+  Mirror bone pose. Enable "Mirror pose" beside "Show Pose", then move a
+  left/right bone in pose mode and its counterpart follows, same amount, sign
+  flipped on the axes that mirror. It happens when you release the slider, not
+  while dragging. Bones with no side -- Root,
   Pelvis, NPC Spine -- are left alone. Which axes flip is set in [MirrorPose],
   because it depends on how your skeleton orients each bone; the defaults are
   the Skyrim convention.
-
-  Stroke stabilizer, OFF by default -- Blender's "Stabilize Stroke". The
-  brush hangs from the cursor on a rope of [Tuning] StabilizerRadius pixels.
-  While the cursor moves inside that radius the brush does not move at all,
-  which is where hand tremor dies. Try 20 to 40. It only acts during a
-  stroke, and only when the tool in your hand is a brush -- with the Select
-  tool the left button moves the camera.
 
   Reorder sliders by dragging a row. Press on the BACKGROUND of the row --
   the pencil, the checkbox and the bar keep working as they do. Esc cancels.
@@ -112,15 +114,16 @@ Either way, the DLL goes right next to it.
 One copy covers both programs: the Outfit Studio executable lives in that same
 folder and has no folder of its own. You do not need a second copy anywhere.
 
-  Mod Organizer 2   Do NOT install as a separate mod -- MO2 maps mods into
-                    the game's Data folder, never into another mod's folder,
-                    so it would never load. Install this archive OVER your
-                    "BodySlide and Outfit Studio" mod and choose to merge,
-                    or copy the two files into
+  MO2 / Vortex      Do NOT install this archive as a normal standalone mod.
+                    Open the installed BodySlide mod/folder and copy the
+                    archive contents directly into the directory containing
+                    the BodySlide and OutfitStudio executables. A typical MO2
+                    destination is:
                     mods\BodySlide and Outfit Studio\CalienteTools\BodySlide\
 
-  Vortex / manual   Extract into the folder containing the BodySlide
-                    executable.
+  Manual            Extract the archive directly into the folder containing
+                    the BodySlide and OutfitStudio executables. Do not create
+                    another CalienteTools folder inside it.
 
 Launching BodySlide through MO2 keeps working normally.
 

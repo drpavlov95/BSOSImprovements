@@ -286,6 +286,18 @@ void DragToCursor();
 void FinishDrag(bool cancelled);
 void RefreshRows();
 
+// A troca de outfit pode destruir a linha ou o painel enquanto uma alca ainda
+// tem a captura do mouse. Nesse caso nao ha mais onde recolocar as linhas: o
+// arrasto apenas deixa de existir junto com a arvore antiga.
+void AbandonDrag() {
+	if (!g_drag.active)
+		return;
+	if (g_drag.slot && IsWindow(g_drag.slot))
+		DestroyWindow(g_drag.slot);
+	g_drag = Drag();
+	LogF("reorder: arrasto abandonado porque a lista foi reconstruida");
+}
+
 // Se o ponteiro esta em cima desta alca.
 //
 // Guardado na propria janela, e nao num global: sao mais de cem alcas na tela e
@@ -374,6 +386,11 @@ void PaintGrip(HWND grip, HDC dc) {
 LRESULT CALLBACK GripProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR) {
 	switch (msg) {
 		case WM_NCDESTROY:
+			if (g_drag.active) {
+				HWND row = GetParent(hwnd);
+				if (std::find(g_drag.order.begin(), g_drag.order.end(), row) != g_drag.order.end())
+					AbandonDrag();
+			}
 			RemoveWindowSubclass(hwnd, GripProc, id);
 			break;
 
@@ -720,6 +737,8 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UIN
 	}
 
 	if (msg == WM_NCDESTROY) {
+		if (g_drag.active && g_drag.host == hwnd)
+			AbandonDrag();
 		RemoveWindowSubclass(hwnd, HostProc, id);
 		if (hwnd == g_knownHost)
 			g_knownHost = nullptr;
