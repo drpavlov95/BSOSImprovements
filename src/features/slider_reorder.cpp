@@ -43,6 +43,7 @@ HWND g_posePanel = nullptr;
 bool g_installed = false;
 UINT g_saveId = 0;
 UINT g_saveAsId = 0;
+UINT g_exitId = 0;
 bool g_orderDirty = false;
 bool g_titleMarked = false;
 std::vector<std::wstring> g_desiredOrder;
@@ -1122,32 +1123,41 @@ void OnGripsToggled(bool checked) {
 	LogF("reorder: alcas %s pelo menu", checked ? "ligadas" : "desligadas");
 }
 
+bool PromptToSaveOrder(HWND hwnd) {
+	if (!g_orderDirty)
+		return true;
+
+	const int answer = MessageBoxW(hwnd,
+		L"The slider order has unsaved changes. Would you like to save them now?",
+		L"Unsaved Changes", MB_YESNOCANCEL | MB_ICONWARNING);
+	if (answer == IDCANCEL)
+		return false;
+	if (answer == IDYES) {
+		const UINT saveCommand = g_saveId ? g_saveId : g_saveAsId;
+		if (saveCommand)
+			SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(saveCommand, 0), 0);
+		return !g_orderDirty; // Save cancelado, falhou ou nao encontrou o .osp
+	}
+
+	g_orderDirty = false;
+	ClearOrderTitleMark();
+	return true;
+}
+
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
 						   UINT_PTR id, DWORD_PTR) {
 	if (msg == WM_NCDESTROY) {
 		RemoveWindowSubclass(hwnd, FrameProc, id);
 		return DefSubclassProc(hwnd, msg, wParam, lParam);
 	}
-	if (msg == WM_CLOSE && g_orderDirty && g_titleMarked) {
-		const int answer = MessageBoxW(hwnd,
-			L"The slider order has unsaved changes. Would you like to save them now?",
-			L"Unsaved Changes", MB_YESNOCANCEL | MB_ICONWARNING);
-		if (answer == IDCANCEL)
-			return 0;
-		if (answer == IDYES) {
-			const UINT saveCommand = g_saveId ? g_saveId : g_saveAsId;
-			if (saveCommand)
-				SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(saveCommand, 0), 0);
-			if (g_orderDirty)
-				return 0; // Save cancelado, falhou ou nao encontrou o .osp
-		}
-		else {
-			g_orderDirty = false;
-			ClearOrderTitleMark();
-		}
-	}
 
 	const UINT command = (msg == WM_COMMAND) ? LOWORD(wParam) : 0;
+	const bool closeCommand = (msg == WM_CLOSE) ||
+		(msg == WM_SYSCOMMAND && ((wParam & 0xFFF0u) == SC_CLOSE)) ||
+		(command != 0 && command == g_exitId);
+	if (closeCommand && !PromptToSaveOrder(hwnd))
+		return 0;
+
 	const bool save = command != 0 && (command == g_saveId || command == g_saveAsId);
 	OspSnapshot before;
 	if (save && !g_desiredOrder.empty())
@@ -1288,8 +1298,10 @@ bool Install(HWND frame) {
 	if (HMENU bar = GetMenu(frame)) {
 		const MenuTrail save = ResolveMenuTrail(xrc.c_str(), "fileSave");
 		const MenuTrail saveAs = ResolveMenuTrail(xrc.c_str(), "fileSaveAs");
+		const MenuTrail exit = ResolveMenuTrail(xrc.c_str(), "fileExit");
 		g_saveId = save.empty() ? 0 : CommandIdAtLabeledPath(bar, save.path, save.labels);
 		g_saveAsId = saveAs.empty() ? 0 : CommandIdAtLabeledPath(bar, saveAs.path, saveAs.labels);
+		g_exitId = exit.empty() ? 0 : CommandIdAtLabeledPath(bar, exit.path, exit.labels);
 	}
 	if (!SetWindowSubclass(frame, FrameProc, kFrameSubclassId, 0))
 		LogF("reorder: nao consegui observar Save/Save As");
@@ -1336,6 +1348,7 @@ void Uninstall() {
 	g_recheckPending = false;
 	g_saveId = 0;
 	g_saveAsId = 0;
+	g_exitId = 0;
 	g_orderDirty = false;
 	g_titleMarked = false;
 	g_drag = Drag();
