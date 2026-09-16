@@ -52,9 +52,10 @@ struct Config {
 	bool mirrorBonePose = true;
 	bool zeroSlidersHotkey = true;
 
-	// Reordenar sliders arrastando a linha pelo fundo dela. So visual: a ordem
-	// vive na tela e no mod, e o arquivo do projeto nao e tocado.
+	// Reordenar sliders pelas alcas. A ordem e persistida no .osp apenas quando
+	// o usuario usa Save/Save As e a correspondencia e inequivoca.
 	bool sliderReorder = true;
+	bool seamMasks = true;
 
 	// As alcas de arrastar ao lado do lapis. Ligar empurra os controles do
 	// programa uns pixels para a direita para abrir espaco -- nao havia nenhum

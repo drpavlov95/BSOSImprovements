@@ -68,6 +68,12 @@ Outfit Studio
   filter only hides rows: a hidden row keeps its check mark, and clearing the
   box brings everything back.
 
+  Shape > Masks adds four one-vertex-wide mask tools. Anatomical Seams finds
+  the neck, wrist and ankle openings of an upright humanoid mesh while
+  stopping at connected internal seams. Geometric Seams finds coincident
+  split boundaries, UV Seams narrows that to UV splits, and Non-Manifold
+  Borders finds open or over-connected edges. Hovering each item explains it.
+
   Mirror bone pose. Enable "Mirror pose" beside "Show Pose", then move a
   left/right bone in pose mode and its counterpart follows, same amount, sign
   flipped on the axes that mirror. It happens when you release the slider, not
@@ -78,7 +84,9 @@ Outfit Studio
 
   Reorder sliders by dragging a row. Press on the BACKGROUND of the row --
   the pencil, the checkbox and the bar keep working as they do. Esc cancels.
-  For now the order is only on screen; the project file is untouched.
+  Reordering marks the project as modified. The new order is written into the
+  matching SliderSet inside the .osp when you save the project, so Outfit
+  Studio's normal save prompt and unsaved-change asterisk both work.
 
   Blender-style camera, OFF by default:
 
@@ -131,9 +139,10 @@ Requires a 64-bit executable. On 5.6 and 5.7 that is the one with the x64
 suffix; the 32-bit build still starts, just without the improvements. 5.8.0
 dropped the suffix and the plain name is the 64-bit build.
 
-Verified against 5.8.2. Nothing depends on memory addresses or byte
-signatures, so newer versions should work, and anything that cannot be found
-disables itself rather than breaking the program.
+Verified against 5.8.2. Most features use standard Windows messages and turn
+themselves off if their target UI cannot be found. The Shape > Masks tools
+access the live mesh directly and are deliberately enabled only for the exact
+verified Outfit Studio 5.8.2 binary; they stay unavailable on another build.
 
 To uninstall, delete msimg32.dll and BSOSImprovements.ini.
 If you update BodySlide, redo this: the files live in its folder.
@@ -173,10 +182,10 @@ tooltip without binding anything, which is what the brush digits need:
 COMPATIBILITY
 -------------
 
-Verified against 5.8.2, developed originally against 5.6.3. Nothing depends on
-memory addresses or byte signatures -- only on standard Windows messages -- so
-other versions should work. Anything that cannot be found disables itself
-instead of breaking the program.
+Verified against 5.8.2, developed originally against 5.6.3. Most features use
+standard Windows messages, so other versions should work and anything that
+cannot be found disables itself. The direct mesh access used by Shape > Masks
+is hash-locked to the verified Outfit Studio 5.8.2 executable for safety.
 
 Dark mode is followed. 5.8.2 added a light/dark setting, and everything this
 mod draws itself reads AppearanceMode from BodySlide's own Config.xml, so it

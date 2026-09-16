@@ -96,6 +96,13 @@ contract as the Choose Groups search. Clearing the box brings everything back. T
 closes its own gaps because the hiding is done in a way wxWidgets understands, so the
 scrollbar stays honest.
 
+**Mask mesh seams directly.** **Shape > Masks** contains four one-vertex-wide
+mask tools. **Anatomical Seams** finds the neck, wrist and ankle openings of an
+upright humanoid body while stopping where a connected seam turns back into the
+mesh. **Geometric Seams** finds coincident split boundaries, **UV Seams** narrows
+that to UV splits, and **Non-Manifold Borders** finds open or over-connected
+edges. Each menu item explains itself when hovered.
+
 **Mirror bone pose.** Enable **Mirror pose** beside **Show Pose**, then move a left/right
 bone in pose mode and its counterpart follows by the same amount, with the sign flipped
 on the configured axes.
@@ -120,8 +127,9 @@ This was possible because of something the log turned up while chasing a differe
 each slider row is its own panel, so dragging one is moving a single window rather than
 rebuilding a layout.
 
-For now the new order lives on screen only; the project file is untouched. Writing it into
-the `.osp` when *you* save is the next step.
+Reordering marks the project as modified. When you save, the new order is written into
+the matching `SliderSet` inside the `.osp`, so Outfit Studio's normal asterisk and
+unsaved-change prompt continue to protect the edit.
 
 **Blender-style camera** *(off by default)*. The vanilla of the two programs, side by
 side:
@@ -221,11 +229,11 @@ NegateOffsetX=1
 
 ## Compatibility
 
-- **Verified against 5.8.2**, and developed originally against 5.6.3. Nothing here
-  depends on memory addresses or byte signatures, only on standard Windows messages, so
-  newer versions should keep working — including 5.8.0, which renamed the executables. If
-  something cannot be found on a newer build, that piece disables itself silently instead
-  of breaking the program.
+- **Verified against 5.8.2**, and developed originally against 5.6.3. Most features use
+  standard Windows messages and disable themselves if their target UI cannot be found.
+  The direct live-mesh access behind **Shape > Masks** is deliberately hash-locked to the
+  verified Outfit Studio 5.8.2 executable; it remains unavailable on another binary
+  rather than risking memory corruption.
 - **Dark mode is followed.** 5.8.2 added a light/dark setting, and everything this mod
   draws itself follows it: the Choose Groups replacement and the Batch Build and
   Symmetrize search boxes read `AppearanceMode` from BodySlide's own `Config.xml`, so

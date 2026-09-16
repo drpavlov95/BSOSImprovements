@@ -28,3 +28,11 @@ std::vector<std::string> ReadOspSliderOrder(const std::string& xml, const std::s
 // um palpite aqui o corrompe em silencio.
 std::string ReorderOspSliders(const std::string& xml, const std::string& setName,
 							  const std::vector<std::string>& order);
+
+// Procura o UNICO SliderSet cujo conjunto de nomes coincide exatamente com a
+// ordem pedida e reordena esse conjunto. Devolve vazio se nenhum ou mais de um
+// conjunto combinar: nesse caso escolher seria um palpite sobre o projeto do
+// usuario. `matchedSet`, quando fornecido, recebe o nome do conjunto escolhido.
+std::string ReorderUniqueMatchingOspSliderSet(const std::string& xml,
+										   const std::vector<std::string>& order,
+										   std::string* matchedSet = nullptr);

@@ -1,6 +1,7 @@
 #include "core/osp.h"
 
 #include <algorithm>
+#include <map>
 
 namespace {
 
@@ -80,6 +81,45 @@ bool FindSetRange(const std::string& xml, const std::string& setName, size_t& be
 		}
 		search = tagEnd + 1;
 	}
+}
+
+std::vector<std::string> SliderSetNames(const std::string& xml) {
+	std::vector<std::string> names;
+	size_t search = 0;
+	for (;;) {
+		const size_t open = xml.find("<SliderSet", search);
+		if (open == std::string::npos)
+			break;
+		const size_t after = open + 10;
+		if (after < xml.size() && xml[after] != ' ' && xml[after] != '\t' &&
+			xml[after] != '\r' && xml[after] != '\n' && xml[after] != '>') {
+			search = after;
+			continue; // <SliderSetInfo>
+		}
+		const size_t tagEnd = xml.find('>', open);
+		if (tagEnd == std::string::npos)
+			break;
+		std::string name = AttributeValue(xml, open, tagEnd, "name");
+		if (!name.empty())
+			names.push_back(std::move(name));
+		search = tagEnd + 1;
+	}
+	return names;
+}
+
+bool SameNames(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+	if (a.size() != b.size() || a.empty())
+		return false;
+	std::map<std::string, size_t> counts;
+	for (const std::string& name : a)
+		++counts[name];
+	for (const std::string& name : b) {
+		auto it = counts.find(name);
+		if (it == counts.end() || it->second == 0)
+			return false;
+		--it->second;
+	}
+	return true;
 }
 
 // Os blocos de slider de um intervalo, na ordem do arquivo.
@@ -198,5 +238,25 @@ std::string ReorderOspSliders(const std::string& xml, const std::string& setName
 
 	// E tudo depois do ultimo.
 	out.append(xml, blocks.back().end, xml.size() - blocks.back().end);
+	return out;
+}
+
+std::string ReorderUniqueMatchingOspSliderSet(const std::string& xml,
+										   const std::vector<std::string>& order,
+										   std::string* matchedSet) {
+	std::string match;
+	for (const std::string& setName : SliderSetNames(xml)) {
+		if (!SameNames(ReadOspSliderOrder(xml, setName), order))
+			continue;
+		if (!match.empty())
+			return std::string(); // ambiguo: dois sets tem os mesmos sliders
+		match = setName;
+	}
+	if (match.empty())
+		return std::string();
+
+	std::string out = ReorderOspSliders(xml, match, order);
+	if (!out.empty() && matchedSet)
+		*matchedSet = match;
 	return out;
 }

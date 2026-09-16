@@ -144,3 +144,34 @@ TEST(TouchesOnlyTheNamedSliderSet) {
 	TEST_ASSERT(PositionOf(out, "name=\"A\"") < PositionOf(out, "name=\"C\""));
 	return true;
 }
+
+TEST(FindsTheOnlySliderSetMatchingTheVisibleOrder) {
+	const std::string two =
+		"<SliderSetInfo>\n"
+		"  <SliderSet name=\"Other\">\n"
+		"    <Slider name=\"X\"/>\n"
+		"  </SliderSet>\n"
+		"  <SliderSet name=\"Wanted\">\n"
+		"    <Slider name=\"A\"/>\n"
+		"    <Slider name=\"B\"/>\n"
+		"  </SliderSet>\n"
+		"</SliderSetInfo>\n";
+	std::string matched;
+	const std::string out = ReorderUniqueMatchingOspSliderSet(two, {"B", "A"}, &matched);
+	TEST_ASSERT(!out.empty());
+	TEST_ASSERT(matched == "Wanted");
+	const auto order = ReadOspSliderOrder(out, "Wanted");
+	TEST_ASSERT(order.size() == 2 && order[0] == "B" && order[1] == "A");
+	return true;
+}
+
+TEST(RefusesAnAmbiguousOrPartialSliderSetMatch) {
+	const std::string ambiguous =
+		"<SliderSetInfo>\n"
+		"  <SliderSet name=\"One\">\n    <Slider name=\"A\"/>\n    <Slider name=\"B\"/>\n  </SliderSet>\n"
+		"  <SliderSet name=\"Two\">\n    <Slider name=\"B\"/>\n    <Slider name=\"A\"/>\n  </SliderSet>\n"
+		"</SliderSetInfo>\n";
+	TEST_ASSERT(ReorderUniqueMatchingOspSliderSet(ambiguous, {"B", "A"}).empty());
+	TEST_ASSERT(ReorderUniqueMatchingOspSliderSet(kOsp, {"Beta", "Alfa"}).empty());
+	return true;
+}

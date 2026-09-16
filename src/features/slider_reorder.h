@@ -26,9 +26,9 @@
 // primeiro relayout, que e exatamente o modo como a busca do Symmetrize falhou
 // tres vezes antes de aprender a mesma licao.
 //
-// Por enquanto a ordem e so visual: ela vive na tela e no mod, e o arquivo do
-// projeto nao e tocado. Escrever no disco sem o usuario mandar salvar seria
-// mexer no trabalho dele pelas costas.
+// A ordem vive na tela ate o usuario mandar salvar. Depois do Save/Save As
+// nativo, a DLL localiza o unico .osp alterado e o unico SliderSet com a mesma
+// lista exata de nomes; so entao move os blocos <Slider> no arquivo.
 namespace SliderReorder {
 
 bool Install(HWND frame);
