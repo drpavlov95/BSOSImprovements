@@ -122,6 +122,14 @@ struct Config {
 	// id de comando que nao eram verdade, e o custo so apareceu na mao do
 	// usuario.
 	bool dumpWindows = false;
+
+	// [Debug] WeldProbe: instrumentacao descartavel em Shape > Weld Probe, para
+	// medir tres coisas do host antes de desenhar o magnetismo de seams -- se o
+	// pincel le Mesh::norms, quando o host as recalcula, e se uma escrita em
+	// Mesh::verts chega no modelo de dados.
+	//
+	// Sai junto com weld_probe.cpp quando as respostas estiverem no lugar.
+	bool weldProbe = false;
 };
 
 // Le uma secao de linhas "xrcName=tecla". Entradas com hotkey invalida sao

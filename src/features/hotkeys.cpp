@@ -15,6 +15,7 @@
 #include "features/slider_menu.h"
 #include "features/slider_reorder.h"
 #include "features/seam_masks.h"
+#include "features/weld_probe.h"
 #include "features/zero_sliders.h"
 #include "win32/menu_toggle.h"
 #include "win32/winfind.h"
@@ -247,7 +248,8 @@ bool HotkeysEnabled(const Config& cfg) {
 	// desligou tudo continua sem nada -- inclusive sem o item de menu.
 	return cfg.referenceHotkey || cfg.sliderObjHotkeys || cfg.brushResizeDrag ||
 		   cfg.blenderCamera || cfg.zeroSlidersHotkey ||
-		   cfg.sliderReorder || cfg.seamMasks || cfg.dumpWindows || !cfg.remaps.empty();
+		   cfg.sliderReorder || cfg.seamMasks || cfg.dumpWindows || cfg.weldProbe ||
+		   !cfg.remaps.empty();
 }
 
 // O BodySlide so tem uma tecla, e nao tem menubar nem view 3D. Tudo o mais que
@@ -311,6 +313,7 @@ bool Install(HWND frame) {
 	const bool camera = outfitStudio && BlenderCamera::Install(frame);
 	const bool reorder = outfitStudio && cfg.sliderReorder && SliderReorder::Install(frame);
 	const bool seamMasks = outfitStudio && cfg.seamMasks && SeamMasks::Install(frame);
+	const bool weldProbe = outfitStudio && cfg.weldProbe && WeldProbe::Install(frame);
 
 	if (cfg.zeroSlidersHotkey && ZeroSliders::Install(frame))
 		AddBinding(cfg.zeroSliders, "zerar sliders", ActionZeroSliders);
@@ -334,7 +337,7 @@ bool Install(HWND frame) {
 
 	// A camera nao usa binding de tecla: ela reescreve mensagens de mouse. Sem
 	// esta parte, ligar somente a camera nao instalaria o hook.
-	if (g_bindings.empty() && !camera && !reorder && !seamMasks) {
+	if (g_bindings.empty() && !camera && !reorder && !seamMasks && !weldProbe) {
 		LogF("hotkeys: nenhum atalho configurado");
 		return false;
 	}
@@ -360,6 +363,7 @@ void Uninstall() {
 	BlenderCamera::Uninstall();
 	SliderReorder::Uninstall();
 	SeamMasks::Uninstall();
+	WeldProbe::Uninstall();
 	MenuToggle::RemoveAll();
 	ZeroSliders::Uninstall();
 	g_bindings.clear();

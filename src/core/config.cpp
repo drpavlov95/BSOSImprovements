@@ -208,5 +208,6 @@ Config LoadConfig(const wchar_t* iniPath) {
 
 	c.logFile = ReadBool(iniPath, L"Debug", L"LogFile", c.logFile);
 	c.dumpWindows = ReadBool(iniPath, L"Debug", L"DumpWindows", c.dumpWindows);
+	c.weldProbe = ReadBool(iniPath, L"Debug", L"WeldProbe", c.weldProbe);
 	return c;
 }
