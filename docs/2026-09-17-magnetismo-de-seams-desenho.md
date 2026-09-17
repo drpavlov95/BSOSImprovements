@@ -1,7 +1,8 @@
 # Magnetismo de seams entre meshes -- desenho
 
-Estado: **desenho aceito, bloqueado numa incognita.** O solver esta especificado
-e nao depende do bloqueio; o caminho de gravacao depende.
+Estado: **desenho aceito, bloqueador respondido.** O ponto de hook existe, foi
+achado e esta mapeado abaixo. O solver continua especificado e sem dependencia
+dele.
 
 ## O problema
 
@@ -119,6 +120,10 @@ tocar, observa call sites dentro do `SaveProject`, e guarda o `OutfitProject` em
 
 ## O solver
 
+Estado: **construido e testado**, em `src/mesh/contact.h` e `.cpp`, com 13 testes
+em `tests/test_contact.cpp` que rodam sem o host. Falta so o que depende do
+hospedeiro: o hook, a escolha das meshes e amarrar os aneis ao raio do pincel.
+
 Esta parte e geometria pura e **nao depende do bloqueio**. Ela e identica
 qualquer que seja o destino da escrita, e e testavel no chicote de testes que
 roda sem o host.
@@ -185,24 +190,107 @@ Grudar os dois funciona, mas o segundo se comporta de outro jeito quando o corpo
 infla. Nao resolvido, e nao urgente -- a selecao de meshes do passo 1 permite ao
 usuario simplesmente nao incluir o sutia.
 
-## O bloqueador
+## O bloqueador -- respondido: sim, a funcao existe
 
-**A funcao de aplicacao do traco existe num lugar que da para achar e hookar?**
+Feito no Ghidra, no `OutfitStudio x64.exe` 5.8.2 da mesma instalacao de onde
+saem os RVAs que o mod ja usa. O RTTI da MSVC entregou os nomes de classe, como
+esperado, entao a busca foi por nome e nao rastreamento a mao.
 
-Isso e Ghidra, e e o proximo passo. Nada mais do desenho depende de resposta
-nenhuma; tudo depende desta.
+### O mapa
 
-Se a resposta for nao, a feature morre -- porque a alternativa que salvaria o
-codigo do solver e justamente a que foi recusada. Construir o solver antes da
-resposta e uma aposta consciente na existencia do hook.
+| alvo | RVA | como foi identificado |
+| --- | --- | --- |
+| `TweakBrush` vftable | `0xFB49F0` | RTTI |
+| `TB_Inflate` vftable | `0xFB45B0` | RTTI |
+| slot `+0xD8` na vftable base | aponta pro `_purecall` (`0xB4959C`) | prova de que o slot e **virtual puro** |
+| `TB_Inflate::brushAction` | `0x158640` | slot `+0xD8` da vftable de TB_Inflate |
+| `TweakStroke::updateStroke` | `0x1569C0` | unica funcao que chama `+0xB8`, `+0xD0` e `+0xD8` em sequencia, num laco sobre meshes |
+| `strokeInit` (slot `+0xB0`) | `0x157990` | copia as normais no inicio do traco |
 
-Setup: **GhidrAssistMCP** servindo `localhost:8080/sse` de dentro de um Ghidra
-aberto, com o `OutfitStudio x64.exe` ja importado e analisado -- o mesmo projeto
-de onde sairam os RVAs que o mod ja usa.
-A Symbol Tree tem `Classes` e `Namespaces` populados, ou seja o RTTI foi digerido
--- num binario C++ da MSVC isso entrega nomes de classe de verdade mesmo sem PDB,
-entao a busca provavelmente e por nome e nao um rastreamento a mao a partir do
-handler de mouse.
+O `TB_Inflate` so sobrescreve tres slots da base: `+0x18`, `+0x40` e `+0xD8`. O
+`+0xD8` e o unico virtual puro da classe, e o `0x158640` que o preenche e o que
+mexe em vertice. Os outros pinceis repetem o padrao -- `0x158b80`, `0x158fe0`,
+`0x15c880`, `0x160870`, `0x160d20`, `0x161210`, `0x1615c0` sao as outras
+implementacoes do mesmo slot.
+
+### A acao do traco, por dentro
+
+```c
+void brushAction(TweakBrush* this, mesh* m, TweakPickInfo* pick,
+                 const int* points, int nPoints, UndoStateShape* undo);
+```
+
+Na ordem, por ponto da pincelada:
+
+1. le a posicao atual em `m->verts` (`mesh+0xB8`)
+2. se o vertice ainda nao estiver no **mapa de inicio** (`undo+0x20`), grava ali a
+   posicao de partida
+3. calcula o deslocamento: direcao x forca x falloff (slot `+0xC8`) x
+   `(1 - mascara)`, com a mascara em `mesh+0xF0`
+4. **escreve a posicao nova em `m->verts`**
+5. grava a posicao nova no **mapa de fim** (`undo+0x60`)
+6. marca a mesh como suja (byte em `mesh+0`)
+
+Os dois mapas sao `unordered_map<int, Vector3>` e as insercoes passam pelo mesmo
+helper do host (`0x164a00`), que devolve o no e deixa o `Vector3` em `no+0x14`.
+
+### O laco que hospeda a correcao
+
+`updateStroke(TweakStroke* this, TweakPickInfo* pick)`, campos que interessam:
+
+| offset | conteudo |
+| --- | --- |
+| `+0x00` / `+0x08` | `vector<mesh*>` das meshes do traco |
+| `+0x18` | `TweakBrush*` ativo |
+| `+0x20` | flag "primeiro update" (pula a checagem de espacamento) |
+| `+0x24` | ultimo ponto de pick, `Vector3` |
+| `+0xF0` | `UndoStateProject*` -- o vetor de `UndoStateShape` comeca em `*(+0x08)`, **passo `0x118`, indexado na mesma ordem do vector de meshes** |
+
+Por mesh: espacamento (`+0xB8`) -> coleta de pontos (`+0xD0`) -> acao (`+0xD8`)
+-> se o pincel e espelhado, repete coleta e acao com o pick espelhado -> empurra
+o estado pra fila global de undo. No fim do laco, recalcula normais e sobe os
+buffers de video.
+
+### O que isso muda no desenho
+
+1. **O hook e um so, e nao um por pincel.** `updateStroke` da acesso as meshes
+   todas *e* ao `UndoStateShape` de cada uma -- que e exatamente o que o solver
+   precisa, porque corrigir o pescoco mexe na cabeca enquanto o pincel esta no
+   corpo. Remendar o slot `+0xD8` de cada vftable `TB_*` instala mais limpo (sem
+   patch de codigo) mas entrega uma mesh por chamada, sem as outras
+   `UndoStateShape` -- nao serve.
+2. **Persistencia e undo saem pelo mesmo cano do pincel**: escrever no mapa de
+   fim (`undo+0x60`) e, se o vertice for novo naquele traco, tambem no de inicio
+   (`undo+0x20`). Era a duvida que mantinha o desenho travado.
+3. A correcao tem de entrar **antes da cauda** de `updateStroke` (normais +
+   buffers), ou refazer essa cauda para a tela nao ficar um tick atras.
+4. `updateStroke` nao e virtual: precisa de desvio nos bytes de entrada. A
+   primeira instrucao e `mov [rsp+0x10], rdx` -- **5 bytes exatos**, entao um
+   `jmp rel32` cabe sem partir instrucao, e o trampolim so reexecuta ela.
+   Assinatura pra validar antes de tocar:
+   `48 ? ? ? ? 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC`
+
+### As medicoes de 2026-09-17, relidas com o codigo na mao
+
+- **"o pincel le as normais uma vez, no mouse-down" estava certo, e agora esta
+  provado.** O `strokeInit` (`0x157990`) copia `mesh+0xC0` para um buffer por
+  mesh guardado no mapa em `brush+0x48`; o `brushAction` tira a direcao de la, e
+  nao do array vivo. Replantar `+0xC0` no meio do traco nao tinha como mudar a
+  direcao -- e mudou o sombreamento porque o array continua alimentando o
+  renderizador. As duas metades da medicao batem.
+- **"escrever `Mesh::verts` nao persiste" continua verdade, e agora tem
+  mecanismo.** Quem persiste e o par de mapas do `UndoStateShape`, preenchido
+  dentro do `brushAction`. Escrita em `verts` por fora do traco nao deixa rastro
+  nenhum neles, e o rebuild seguinte reconstroi de base + diffs por cima.
+
+### O que ainda nao foi olhado
+
+- o que o fim do traco faz com o `UndoStateProject` -- onde o diff vira projeto
+- o resto do layout do `UndoStateShape` (`0x118` bytes; so os mapas em `+0x20` e
+  `+0x60` foram lidos)
+- o slot `+0xD0` (coleta de pontos) por dentro -- so a assinatura, vista de fora
+- os pinceis de mascara (tipos 2 e 7) tomam outro ramo do laco, com outra
+  chamada; se entram no escopo, precisam de leitura propria
 
 ## Instrumentacao
 
