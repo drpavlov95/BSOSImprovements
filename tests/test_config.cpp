@@ -150,6 +150,7 @@ TEST(NewFeaturesHaveTheRightDefaults) {
 
 	TEST_ASSERT(c.shortcutTooltips);
 	TEST_ASSERT(c.symmetrizeSearch);
+	TEST_ASSERT(c.sliderDataFilter);
 	TEST_ASSERT(c.mirrorBonePose);
 	TEST_ASSERT(c.zeroSlidersHotkey);
 	TEST_ASSERT(c.zeroSliders.vk == 'Z' && !c.zeroSliders.shift && !c.zeroSliders.ctrl);
@@ -213,6 +214,7 @@ TEST(ReadsTheNewSections) {
 						 "[Features]\r\n"
 						 "BlenderCamera=1\r\n"
 						 "MirrorBonePose=0\r\n"
+						 "SliderDataFilter=0\r\n"
 						 "ShortcutTooltips=0\r\n"
 						 "[Hotkeys]\r\n"
 						 "ZeroSliders=Alt+Z\r\n"
@@ -228,6 +230,7 @@ TEST(ReadsTheNewSections) {
 	Config c = LoadConfig(path.c_str());
 	TEST_ASSERT(c.blenderCamera);
 	TEST_ASSERT(!c.mirrorBonePose);
+	TEST_ASSERT(!c.sliderDataFilter);
 	TEST_ASSERT(!c.shortcutTooltips);
 	TEST_ASSERT(c.symmetrizeSearch); // ausente no arquivo => default
 	TEST_ASSERT(c.zeroSliders.vk == 'Z' && c.zeroSliders.alt && !c.zeroSliders.shift);

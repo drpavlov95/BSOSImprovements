@@ -172,10 +172,12 @@ Config LoadConfig(const wchar_t* iniPath) {
 	c.brushResizeDrag = ReadBool(iniPath, L"Features", L"BrushResizeDrag", c.brushResizeDrag);
 	c.shortcutTooltips = ReadBool(iniPath, L"Features", L"ShortcutTooltips", c.shortcutTooltips);
 	c.symmetrizeSearch = ReadBool(iniPath, L"Features", L"SymmetrizeSearch", c.symmetrizeSearch);
+	c.sliderDataFilter = ReadBool(iniPath, L"Features", L"SliderDataFilter", c.sliderDataFilter);
 	c.mirrorBonePose = ReadBool(iniPath, L"Features", L"MirrorBonePose", c.mirrorBonePose);
 	c.zeroSlidersHotkey = ReadBool(iniPath, L"Features", L"ZeroSlidersHotkey", c.zeroSlidersHotkey);
 	c.sliderReorder = ReadBool(iniPath, L"Features", L"SliderReorder", c.sliderReorder);
 	c.seamMasks = ReadBool(iniPath, L"Features", L"SeamMasks", c.seamMasks);
+	c.seamMagnetism = ReadBool(iniPath, L"Features", L"SeamMagnetism", c.seamMagnetism);
 	c.sliderDragHandles = ReadBool(iniPath, L"Features", L"SliderDragHandles", c.sliderDragHandles);
 	c.blenderCamera = ReadBool(iniPath, L"Features", L"BlenderCamera", c.blenderCamera);
 
@@ -196,6 +198,18 @@ Config LoadConfig(const wchar_t* iniPath) {
 
 	c.brushResizeSensitivity = ReadFloat(iniPath, L"Tuning", L"BrushResizeSensitivity", c.brushResizeSensitivity);
 
+	// Tolerancia sem sentido cai no default: zero ou negativo faria o grafo de
+	// contato nascer vazio, e o magnetismo ligaria sem fazer nada.
+	const float seamTolerance = ReadFloat(iniPath, L"Tuning", L"SeamMagnetismTolerance",
+										  c.seamMagnetismTolerance);
+	if (seamTolerance > 0.0f)
+		c.seamMagnetismTolerance = seamTolerance;
+
+	const int seamRings = GetPrivateProfileIntW(L"Tuning", L"SeamMagnetismRings",
+												c.seamMagnetismRings, iniPath);
+	if (seamRings > 0)
+		c.seamMagnetismRings = seamRings;
+
 	// Valor sem sentido cai no default em vez de desligar o arrasto: um teto
 	// zero ou negativo faria a forca nunca sair do lugar.
 	const int strengthSteps = GetPrivateProfileIntW(L"Tuning", L"BrushStrengthSteps",
@@ -208,6 +222,5 @@ Config LoadConfig(const wchar_t* iniPath) {
 
 	c.logFile = ReadBool(iniPath, L"Debug", L"LogFile", c.logFile);
 	c.dumpWindows = ReadBool(iniPath, L"Debug", L"DumpWindows", c.dumpWindows);
-	c.weldProbe = ReadBool(iniPath, L"Debug", L"WeldProbe", c.weldProbe);
 	return c;
 }

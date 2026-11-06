@@ -1,8 +1,9 @@
 # Magnetismo de seams entre meshes -- desenho
 
-Estado: **desenho aceito, bloqueador respondido.** O ponto de hook existe, foi
-achado e esta mapeado abaixo. O solver continua especificado e sem dependencia
-dele.
+Estado: **construido inteiro, e nunca rodado.** O bloqueador foi respondido no
+Ghidra, o solver esta de pe e testado, e a ponte com o host esta escrita e
+compilando. O que falta e a unica coisa que este documento nao pode dar:
+abrir o Outfit Studio, ligar o item de menu e esculpir um pescoco.
 
 ## O problema
 
@@ -45,8 +46,8 @@ reofereca, nem como entrega intermediaria.
 
 ## Medicoes (2026-09-17)
 
-Feitas no Outfit Studio 5.8.2 rodando, com a instrumentacao descartavel em
-`src/features/weld_probe.cpp`, atras de `[Debug] WeldProbe=1`.
+Feitas no Outfit Studio 5.8.2 rodando, com instrumentacao descartavel que foi
+removida depois que as respostas entraram na implementacao.
 
 **Normais em `Mesh+192`.** Provado calculando a normal geometrica ponderada por
 area a partir dos triangulos e correlacionando com cada array candidato do
@@ -200,18 +201,17 @@ esperado, entao a busca foi por nome e nao rastreamento a mao.
 
 | alvo | RVA | como foi identificado |
 | --- | --- | --- |
-| `TweakBrush` vftable | `0xFB49F0` | RTTI |
-| `TB_Inflate` vftable | `0xFB45B0` | RTTI |
-| slot `+0xD8` na vftable base | aponta pro `_purecall` (`0xB4959C`) | prova de que o slot e **virtual puro** |
-| `TB_Inflate::brushAction` | `0x158640` | slot `+0xD8` da vftable de TB_Inflate |
-| `TweakStroke::updateStroke` | `0x1569C0` | unica funcao que chama `+0xB8`, `+0xD0` e `+0xD8` em sequencia, num laco sobre meshes |
-| `strokeInit` (slot `+0xB0`) | `0x157990` | copia as normais no inicio do traco |
+| `TB_Inflate` vftable | `0x197CBF8` | RTTI |
+| `TB_Inflate::queryPoints` | `0x6100A0` | slot `+0xD8` da vftable |
+| `TB_Inflate::brushAction` | `0x603960` | slot `+0xE0` da vftable |
+| thunk de `TweakStroke::updateStroke` | `0x02E7B2` | destino dos quatro call sites |
+| corpo de `TweakStroke::updateStroke` | `0x611F40` | thunk e prologo conferidos no executavel instalado |
 
-O `TB_Inflate` so sobrescreve tres slots da base: `+0x18`, `+0x40` e `+0xD8`. O
-`+0xD8` e o unico virtual puro da classe, e o `0x158640` que o preenche e o que
-mexe em vertice. Os outros pinceis repetem o padrao -- `0x158b80`, `0x158fe0`,
-`0x15c880`, `0x160870`, `0x160d20`, `0x161210`, `0x1615c0` sao as outras
-implementacoes do mesmo slot.
+A releitura foi feita contra o SHA-256 exato que `HostBuild` aceita, compilando
+tambem o fonte oficial 5.8.2 para recuperar os simbolos. Essa build usa thunks
+de link incremental; os RVAs medidos antes pertenciam a outro layout do mesmo
+codigo. O fonte atual tambem tem um virtual a mais: `queryPoints` esta em
+`+0xD8` e `brushAction`, que mexe nos vertices, em `+0xE0`.
 
 ### A acao do traco, por dentro
 
@@ -232,7 +232,8 @@ Na ordem, por ponto da pincelada:
 6. marca a mesh como suja (byte em `mesh+0`)
 
 Os dois mapas sao `unordered_map<int, Vector3>` e as insercoes passam pelo mesmo
-helper do host (`0x164a00`), que devolve o no e deixa o `Vector3` em `no+0x14`.
+helper do host (thunk `0x00C0E0`, corpo `0x5E2A20`), que devolve o no e deixa o
+`Vector3` em `no+0x14`.
 
 ### O laco que hospeda a correcao
 
@@ -244,36 +245,34 @@ helper do host (`0x164a00`), que devolve o no e deixa o `Vector3` em `no+0x14`.
 | `+0x18` | `TweakBrush*` ativo |
 | `+0x20` | flag "primeiro update" (pula a checagem de espacamento) |
 | `+0x24` | ultimo ponto de pick, `Vector3` |
-| `+0xF0` | `UndoStateProject*` -- o vetor de `UndoStateShape` comeca em `*(+0x08)`, **passo `0x118`, indexado na mesma ordem do vector de meshes** |
+| `+0xF0` | `UndoStateProject*` -- o vetor de `UndoStateShape` comeca em `*(+0x08)`, **passo `0x290`, indexado na mesma ordem do vector de meshes** |
 
-Por mesh: espacamento (`+0xB8`) -> coleta de pontos (`+0xD0`) -> acao (`+0xD8`)
--> se o pincel e espelhado, repete coleta e acao com o pick espelhado -> empurra
-o estado pra fila global de undo. No fim do laco, recalcula normais e sobe os
-buffers de video.
+A checagem de espacamento acontece uma vez; por mesh vem a coleta de pontos
+(`queryPoints`, slot `+0xD8`) e a acao (`brushAction`, slot `+0xE0`). Se o
+pincel e espelhado, coleta e acao se repetem com o pick espelhado. Normais,
+BVH e buffers seguem o fluxo normal do host.
 
 ### O que isso muda no desenho
 
 1. **O hook e um so, e nao um por pincel.** `updateStroke` da acesso as meshes
    todas *e* ao `UndoStateShape` de cada uma -- que e exatamente o que o solver
    precisa, porque corrigir o pescoco mexe na cabeca enquanto o pincel esta no
-   corpo. Remendar o slot `+0xD8` de cada vftable `TB_*` instala mais limpo (sem
+   corpo. Remendar o slot `+0xE0` de cada vftable `TB_*` instala mais limpo (sem
    patch de codigo) mas entrega uma mesh por chamada, sem as outras
    `UndoStateShape` -- nao serve.
 2. **Persistencia e undo saem pelo mesmo cano do pincel**: escrever no mapa de
    fim (`undo+0x60`) e, se o vertice for novo naquele traco, tambem no de inicio
    (`undo+0x20`). Era a duvida que mantinha o desenho travado.
-3. A correcao tem de entrar **antes da cauda** de `updateStroke` (normais +
-   buffers), ou refazer essa cauda para a tela nao ficar um tick atras.
-4. `updateStroke` nao e virtual: precisa de desvio nos bytes de entrada. A
-   primeira instrucao e `mov [rsp+0x10], rdx` -- **5 bytes exatos**, entao um
-   `jmp rel32` cabe sem partir instrucao, e o trampolim so reexecuta ela.
-   Assinatura pra validar antes de tocar:
-   `48 ? ? ? ? 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC`
+3. A correcao entra depois de `updateStroke` original e marca
+   `Mesh::queueUpdate[Position]`; o paint seguinte sobe o buffer corrigido.
+4. `updateStroke` nao e virtual. O mod troca somente os quatro `call rel32` que
+   chegam ao thunk original e valida separadamente thunk, corpo, prologo e
+   destinos antes de escrever qualquer byte.
 
 ### As medicoes de 2026-09-17, relidas com o codigo na mao
 
 - **"o pincel le as normais uma vez, no mouse-down" estava certo, e agora esta
-  provado.** O `strokeInit` (`0x157990`) copia `mesh+0xC0` para um buffer por
+  provado.** O `strokeInit` copia `mesh+0xC0` para um buffer por
   mesh guardado no mapa em `brush+0x48`; o `brushAction` tira a direcao de la, e
   nao do array vivo. Replantar `+0xC0` no meio do traco nao tinha como mudar a
   direcao -- e mudou o sombreamento porque o array continua alimentando o
@@ -286,20 +285,108 @@ buffers de video.
 ### O que ainda nao foi olhado
 
 - o que o fim do traco faz com o `UndoStateProject` -- onde o diff vira projeto
-- o resto do layout do `UndoStateShape` (`0x118` bytes; so os mapas em `+0x20` e
+- o resto do layout do `UndoStateShape` (`0x290` bytes; so os mapas em `+0x20` e
   `+0x60` foram lidos)
 - o slot `+0xD0` (coleta de pontos) por dentro -- so a assinatura, vista de fora
 - os pinceis de mascara (tipos 2 e 7) tomam outro ramo do laco, com outra
   chamada; se entram no escopo, precisam de leitura propria
 
+## A ponte com o host
+
+**Rodada dentro do Outfit Studio instalado em 2026-10-07.** Compila limpo, os
+125 testes passam, o item foi acionado por automacao e o log confirmou a
+instalacao do hook nos quatro call sites. Ainda falta um ensaio manual de
+escultura com duas meshes e Ctrl+Z para validar o resultado visual e o undo.
+
+`src/features/seam_magnetism.{h,cpp}`.
+
+### Onde entra
+
+Remendo de 5 bytes nos **quatro call sites** de `updateStroke` -- `0x898D98`,
+`0x89FBEB`, `0x8A41C3`, `0x8A6BA6` -- e nao um desvio na entrada da funcao. Os
+calls originais apontam para o thunk `0x02E7B2`, que leva ao corpo em
+`0x611F40`. Como o DLL pode cair alem do alcance de +/- 2 GiB de um `call rel32`,
+uma pagina executavel perto do host guarda um relay de 14 bytes (`jmp [rip+0]`
+seguido do endereco absoluto do hook). Ele nao altera registrador nenhum.
+
+Antes de escrever qualquer byte, tres perguntas, todas obrigatorias:
+
+1. o SHA-256 do executavel e o da 5.8.2 medida (`HostBuild`)
+2. o thunk `0x02E7B2` leva ao corpo `0x611F40`, cujo prologo e o que medimos
+3. o thunk `0x00C0E0` leva ao helper de undo `0x5E2A20`, tambem com assinatura
+   conferida
+4. cada call site e mesmo um `E8` cujo destino calculado da no thunk de
+   `updateStroke`
+
+A terceira e o que protege contra outro mod ter chegado antes no mesmo lugar.
+
+### A ordem dentro do hook
+
+```text
+le o flag de "primeiro update" (+0x20)   <- antes, porque o original o zera
+se comeca traco e o grafo nao existe: CONGELA o grafo
+chama updateStroke original              <- o traco do usuario, com ou sem nos
+le o que o pincel mexeu
+resolve o contato
+escreve vertices, mapas de undo e a flag de buffer sujo
+```
+
+Congelar **antes** do original e o ponto fino: montar o grafo depois da primeira
+passada leria um seam que o pincel acabou de abrir, e congelaria justamente a
+ausencia de contato que a feature existe para evitar.
+
+### Como se sabe o que o pincel mexeu
+
+Pelo mapa de fim do `UndoStateShape`, que e a lista dos vertices que o traco
+tocou. Mas nos tambem escrevemos nesse mapa, e um vertice nosso lido de volta
+como "movido" faria o lado que segue virar o lado que manda. A separacao e
+guardar o que escrevemos e comparar: se o valor no mapa e exatamente o que
+deixamos la, o pincel nao voltou nele.
+
+### A guarda que vale por todas
+
+Um pincel de mascara, de peso ou de cor tambem escreve nos mapas do
+`UndoStateShape`. Tratar um peso como se fosse posicao deformaria a malha.
+
+A invariante que separa os dois e barata e exata: **num pincel de geometria, o
+que esta no mapa de fim e igual ao que esta no array de vertices**, porque
+`brushAction` escreve os dois com o mesmo valor. Se um unico par discordar, o
+tick inteiro e descartado sem escrever nada.
+
+Ela cobre de graca o caso que mais assusta: um offset errado em qualquer lugar
+da cadeia (`+0xF0`, `+0x08`, passo `0x290`, `+0x60`) produz numeros que nao tem
+como bater com posicao de vertice.
+
+### O que a tela ve
+
+Escrever no array de vertices nao sobe nada para o OpenGL sozinho. A correcao
+marca `Mesh::queueUpdate[Position]`, o mesmo byte que o `brushAction` marca, e o
+paint seguinte manda o buffer novo. Ficou de fora: a **normal** do vertice
+corrigido so e recalculada no tick seguinte, entao a ultima pincelada pode
+terminar com o sombreamento um tick atrasado ate a proxima interacao.
+
+### Superficie para o usuario
+
+`Shape > Seam Magnetism`, um item marcavel que entra sempre desmarcado -- so
+criar o item quando a feature ja estivesse ligada faria a opcao aparecer apenas
+para quem ja soubesse que ela existe. `[Features] SeamMagnetism` esconde o item;
+`[Tuning] SeamMagnetismTolerance` e `SeamMagnetismRings` afinam o resto.
+
+As meshes que entram sao as do primeiro traco depois de ligar, ou seja: **as que
+o usuario tem selecionadas**. Isso resolve o passo 1 do pedido sem um segundo
+dialogo, e mantem o congelamento.
+
+### O que falta
+
+- fazer um ensaio manual completo com duas meshes e Ctrl+Z
+- amarrar `falloffRings` ao raio do pincel, que e o que o desenho pede; hoje e
+  numero fixo no INI. Falta medir o offset do raio em `TweakBrush`
+- a normal do vertice corrigido, um tick atras
+- o que o fim do traco faz com o `UndoStateProject`: a persistencia depende
+  disso e ainda nao foi lida
+
 ## Instrumentacao
 
-`src/features/weld_probe.cpp` e `.h`, atras de `[Debug] WeldProbe=1`, em
-`Shape > Weld Probe (diagnostico)`. Guardas de memoria duplicadas de proposito
-das de `native_outfit_mesh.cpp`: instrumentacao descartavel nao deve poder
-quebrar o caminho de producao.
-
-Os itens 0 (achar as normais), 7 e 8 (replantar e medir a direcao do
-deslocamento) continuam uteis para validar o hook quando ele existir -- o 8 mede
-para onde a escultura foi, que e exatamente a pergunta que um hook novo precisa
-responder. Apagar quando a feature estiver de pe.
+As sondas `Weld Probe` e `Structure Probe` foram removidas em 2026-10-07. As
+medicoes relevantes ficaram registradas neste documento; nenhum menu ou codigo
+capaz de alterar vertices para diagnostico permanece no DLL distribuido.

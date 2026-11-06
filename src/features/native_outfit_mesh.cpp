@@ -1,45 +1,48 @@
 #include "features/native_outfit_mesh.h"
 
-#include <wincrypt.h>
-
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <string>
 
+#include "core/host_build.h"
 #include "core/log.h"
 
 namespace {
 
-// OutfitStudio.exe 5.8.2.0 usado para esta integracao.
-constexpr std::array<unsigned char, 32> kSupportedSha256 = {
-	0x53, 0xCE, 0xC5, 0x95, 0x2A, 0x32, 0x0D, 0x2D,
-	0x5E, 0xC9, 0x58, 0x2F, 0xE1, 0x11, 0xCC, 0xDB,
-	0x73, 0x53, 0x04, 0xD2, 0xE9, 0x26, 0xE2, 0x72,
-	0xCB, 0x65, 0x44, 0x0F, 0x4C, 0xC4, 0x21, 0x8C,
+struct NativeProfile {
+	uintptr_t wxGlPanelVtableRva;
+	size_t meshVertexCountOffset;
+	size_t meshVerticesOffset;
+	size_t meshUvsOffset;
+	size_t meshMaskOffset;
+	size_t meshTrianglesOffset;
+	size_t meshTriangleCountOffset;
 };
 
-// RTTI/vftable de wxGLPanel nesta build. ASLR e aplicado somando a base viva.
-constexpr uintptr_t kWxGlPanelVtableRva = 0x199F2F8;
+constexpr NativeProfile kProfile582 = {0x199F2F8, 180, 184, 232, 240, 256, 272};
+constexpr NativeProfile kProfile591 = {0x1BEBC48, 180, 184, 232, 240, 256, 272};
+constexpr NativeProfile kProfile610 = {0x214A618, 180, 184, 232, 248, 272, 288};
 
-// Layout de Mesh nesta mesma build (MSVC x64). Antes de qualquer escrita todos
-// os ponteiros, contagens, triangulos e valores amostrados sao validados.
+const NativeProfile* RunningProfile() {
+	switch (HostBuild::CurrentOutfitStudio()) {
+		case HostBuild::OutfitStudioBuild::V5_8_2: return &kProfile582;
+		case HostBuild::OutfitStudioBuild::V5_9_1: return &kProfile591;
+		case HostBuild::OutfitStudioBuild::V6_1_0: return &kProfile610;
+		default: return nullptr;
+	}
+}
+
+// Layout comum da fila de atualizacao. Os campos que mudaram com 6.1 ficam no
+// perfil acima; antes de qualquer escrita todos os ponteiros, contagens,
+// triangulos e valores amostrados sao validados.
 constexpr size_t kMeshQueueMaskOffset = 7; // Mesh::UpdateType::Mask
-constexpr size_t kMeshVertexCountOffset = 180;
-constexpr size_t kMeshVerticesOffset = 184;
-constexpr size_t kMeshUvsOffset = 232;
-constexpr size_t kMeshMaskOffset = 240;
-constexpr size_t kMeshTrianglesOffset = 256;
-constexpr size_t kMeshTriangleCountOffset = 272;
 
 struct NativeVec3 { float x, y, z; };
 struct NativeVec2 { float u, v; };
 struct NativeTriangle { uint16_t a, b, c; };
 
-bool g_supportChecked = false;
-bool g_supported = false;
 bool g_panelScanComplete = false;
 std::vector<uintptr_t> g_panels;
 
@@ -105,44 +108,6 @@ bool ReadValue(uintptr_t address, T& value) {
 							 &value, sizeof(T), &read) != FALSE && read == sizeof(T);
 }
 
-bool HashHost(std::array<unsigned char, 32>& digest) {
-	wchar_t path[MAX_PATH] = {};
-	if (!GetModuleFileNameW(nullptr, path, MAX_PATH))
-		return false;
-
-	HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-						  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-	if (file == INVALID_HANDLE_VALUE)
-		return false;
-
-	HCRYPTPROV provider = 0;
-	HCRYPTHASH hash = 0;
-	bool ok = CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) != FALSE &&
-			  CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash) != FALSE;
-	std::array<BYTE, 64 * 1024> buffer = {};
-	while (ok) {
-		DWORD read = 0;
-		if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr)) {
-			ok = false;
-			break;
-		}
-		if (read == 0)
-			break;
-		ok = CryptHashData(hash, buffer.data(), read, 0) != FALSE;
-	}
-	if (ok) {
-		DWORD bytes = static_cast<DWORD>(digest.size());
-		ok = CryptGetHashParam(hash, HP_HASHVAL, digest.data(), &bytes, 0) != FALSE &&
-			 bytes == digest.size();
-	}
-	if (hash)
-		CryptDestroyHash(hash);
-	if (provider)
-		CryptReleaseContext(provider, 0);
-	CloseHandle(file);
-	return ok;
-}
-
 std::vector<uintptr_t> FindObjectsWithVtable(uintptr_t vtable) {
 	std::vector<uintptr_t> found;
 	std::vector<unsigned char> copy(1024 * 1024);
@@ -185,16 +150,16 @@ std::vector<uintptr_t> FindObjectsWithVtable(uintptr_t vtable) {
 	return found;
 }
 
-bool ReadMeshLayout(uintptr_t mesh, int& vertexCount, uintptr_t& vertices,
+bool ReadMeshLayout(uintptr_t mesh, const NativeProfile& profile, int& vertexCount, uintptr_t& vertices,
 					uintptr_t& uvs, uintptr_t& mask, uintptr_t& triangles, int& triangleCount) {
-	if (!RangeHasProtection(mesh, kMeshTriangleCountOffset + sizeof(int), false))
+	if (!RangeHasProtection(mesh, profile.meshTriangleCountOffset + sizeof(int), false))
 		return false;
-	if (!ReadValue(mesh + kMeshVertexCountOffset, vertexCount) ||
-		!ReadValue(mesh + kMeshVerticesOffset, vertices) ||
-		!ReadValue(mesh + kMeshUvsOffset, uvs) ||
-		!ReadValue(mesh + kMeshMaskOffset, mask) ||
-		!ReadValue(mesh + kMeshTrianglesOffset, triangles) ||
-		!ReadValue(mesh + kMeshTriangleCountOffset, triangleCount))
+	if (!ReadValue(mesh + profile.meshVertexCountOffset, vertexCount) ||
+		!ReadValue(mesh + profile.meshVerticesOffset, vertices) ||
+		!ReadValue(mesh + profile.meshUvsOffset, uvs) ||
+		!ReadValue(mesh + profile.meshMaskOffset, mask) ||
+		!ReadValue(mesh + profile.meshTrianglesOffset, triangles) ||
+		!ReadValue(mesh + profile.meshTriangleCountOffset, triangleCount))
 		return false;
 	if (vertexCount <= 0 || vertexCount > 65535 || triangleCount <= 0 || triangleCount > 500000)
 		return false;
@@ -265,7 +230,8 @@ uintptr_t FindSelectedMeshInPanel(uintptr_t panel) {
 
 		int nv = 0, nt = 0;
 		uintptr_t v = 0, uv = 0, m = 0, t = 0;
-		if (!ReadMeshLayout(selected, nv, v, uv, m, t, nt))
+		const NativeProfile* profile = RunningProfile();
+		if (!profile || !ReadMeshLayout(selected, *profile, nv, v, uv, m, t, nt))
 			continue;
 		return selected;
 	}
@@ -274,9 +240,10 @@ uintptr_t FindSelectedMeshInPanel(uintptr_t panel) {
 
 uintptr_t FindSelectedMesh() {
 	HMODULE host = GetModuleHandleW(nullptr);
-	if (!host)
+	const NativeProfile* profile = RunningProfile();
+	if (!host || !profile)
 		return 0;
-	const uintptr_t vtable = reinterpret_cast<uintptr_t>(host) + kWxGlPanelVtableRva;
+	const uintptr_t vtable = reinterpret_cast<uintptr_t>(host) + profile->wxGlPanelVtableRva;
 	if (!g_panelScanComplete) {
 		g_panels = FindObjectsWithVtable(vtable);
 		g_panelScanComplete = true;
@@ -297,13 +264,7 @@ uintptr_t FindSelectedMesh() {
 namespace NativeOutfitMesh {
 
 bool SupportsRunningBinary() {
-	if (g_supportChecked)
-		return g_supported;
-	g_supportChecked = true;
-	std::array<unsigned char, 32> digest = {};
-	g_supported = HashHost(digest) && digest == kSupportedSha256;
-	LogF("seams nativo: binario 5.8.2 %s", g_supported ? "reconhecido" : "NAO reconhecido");
-	return g_supported;
+	return RunningProfile() != nullptr;
 }
 
 Result SnapshotSelected(Snapshot& out) {
@@ -316,7 +277,8 @@ Result SnapshotSelected(Snapshot& out) {
 
 	int vertexCount = 0, triangleCount = 0;
 	uintptr_t vertices = 0, uvs = 0, mask = 0, triangles = 0;
-	if (!ReadMeshLayout(mesh, vertexCount, vertices, uvs, mask, triangles, triangleCount))
+	const NativeProfile* profile = RunningProfile();
+	if (!profile || !ReadMeshLayout(mesh, *profile, vertexCount, vertices, uvs, mask, triangles, triangleCount))
 		return Result::InvalidLayout;
 
 	out.mesh.vertices.resize(static_cast<size_t>(vertexCount));
@@ -354,7 +316,8 @@ Result ReplaceMask(const Snapshot& snapshot, const std::vector<uint16_t>& vertic
 
 	int vertexCount = 0, triangleCount = 0;
 	uintptr_t nativeVertices = 0, nativeUvs = 0, mask = 0, triangles = 0;
-	if (!ReadMeshLayout(snapshot.nativeMesh, vertexCount, nativeVertices, nativeUvs, mask, triangles,
+	const NativeProfile* profile = RunningProfile();
+	if (!profile || !ReadMeshLayout(snapshot.nativeMesh, *profile, vertexCount, nativeVertices, nativeUvs, mask, triangles,
 						triangleCount) ||
 		vertexCount != static_cast<int>(snapshot.mesh.vertices.size()) || mask != snapshot.nativeMask)
 		return Result::InvalidLayout;

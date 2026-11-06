@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <unordered_map>
 
@@ -287,6 +288,34 @@ ContactGraph BuildContactGraph(const std::vector<ContactMesh>& meshes, float tol
 			graph.onEdges.push_back(best);
 	}
 	return graph;
+}
+
+float AverageEdgeLength(const ContactMesh& mesh) {
+	if (!mesh.positions || !mesh.triangles || mesh.vertexCount == 0 || mesh.triangleCount == 0)
+		return 0.0f;
+
+	const std::vector<Edge> edges = CollectEdges({mesh});
+	if (edges.empty())
+		return 0.0f;
+
+	double total = 0.0;
+	for (const Edge& edge : edges) {
+		const Vec3& start = mesh.positions[static_cast<size_t>(edge.start)];
+		const Vec3& end = mesh.positions[static_cast<size_t>(edge.end)];
+		total += std::sqrt(static_cast<double>(DistanceSquared(start, end)));
+	}
+	return static_cast<float>(total / static_cast<double>(edges.size()));
+}
+
+int RingsForRadius(float radius, float averageEdgeLength) {
+	if (!(radius > 0.0f) || !(averageEdgeLength > 0.0f) || !std::isfinite(radius) ||
+		!std::isfinite(averageEdgeLength))
+		return 1;
+	const double rings = std::ceil(static_cast<double>(radius) /
+								  static_cast<double>(averageEdgeLength));
+	if (rings >= static_cast<double>((std::numeric_limits<int>::max)()))
+		return (std::numeric_limits<int>::max)();
+	return (std::max)(1, static_cast<int>(rings));
 }
 
 namespace {

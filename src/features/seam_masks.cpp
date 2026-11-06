@@ -80,7 +80,7 @@ int InsertPosition(HMENU shape) {
 void ShowResultError(NativeOutfitMesh::Result result) {
 	const wchar_t* text = L"The selected mesh could not be accessed safely.";
 	if (result == NativeOutfitMesh::Result::UnsupportedBinary)
-		text = L"Mask Seams supports only the verified Outfit Studio 5.8.2 build.";
+		text = L"Mask Seams supports only the verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0 builds.";
 	else if (result == NativeOutfitMesh::Result::NoSelectedMesh)
 		text = L"Select exactly one shape and try again.";
 	MessageBoxW(g_frame, text, L"Mask Seams", MB_OK | MB_ICONINFORMATION);

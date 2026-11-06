@@ -68,11 +68,30 @@ Outfit Studio
   filter only hides rows: a hidden row keeps its check mark, and clearing the
   box brings everything back.
 
+  The "Slider Data" window gets a field dropdown beside Filter. Choose Slider,
+  Shape, Target, Data Folder(s), etc. to search only there instead of across
+  every field. Click a column header to sort alphabetically; click it again for
+  descending order. Make Local, Make External and Edit Folders keep operating
+  on the right entries after filtering or sorting.
+
   Shape > Masks adds four one-vertex-wide mask tools. Anatomical Seams finds
   the neck, wrist and ankle openings of an upright humanoid mesh while
   stopping at connected internal seams. Geometric Seams finds coincident
   split boundaries, UV Seams narrows that to UV splits, and Non-Manifold
   Borders finds open or over-connected edges. Hovering each item explains it.
+
+  Shape > Seam Magnetism keeps vertices that are touching from coming apart
+  while you sculpt. Sculpting a neck means moving two meshes -- half of it is
+  on the body, half on the head -- and selecting both does not join them: the
+  halves drift and a gap opens. Masking the ring does not help either, because
+  a mask weakens the brush instead of tying vertices together. Select the
+  meshes, turn the toggle on, and the first stroke after that freezes which
+  vertices are in contact; nothing is re-detected afterwards, so sculpting
+  never invents new contacts. A vertex sitting on another mesh's edge follows
+  that edge, so sculpt on the denser side and the sparse side comes along. The
+  correction happens inside the brush stroke, which is why Ctrl+Z undoes the
+  stroke with the correction in it and the result saves normally. Contact
+  distance and how far the correction spreads inward are in [Tuning].
 
   Mirror bone pose. Enable "Mirror pose" beside "Show Pose", then move a
   left/right bone in pose mode and its counterpart follows, same amount, sign
@@ -139,10 +158,12 @@ Requires a 64-bit executable. On 5.6 and 5.7 that is the one with the x64
 suffix; the 32-bit build still starts, just without the improvements. 5.8.0
 dropped the suffix and the plain name is the 64-bit build.
 
-Verified against 5.8.2. Most features use standard Windows messages and turn
-themselves off if their target UI cannot be found. The Shape > Masks tools
-access the live mesh directly and are deliberately enabled only for the exact
-verified Outfit Studio 5.8.2 binary; they stay unavailable on another build.
+The standard UI features were source-audited against 6.1.0. Most use standard
+Windows messages and turn themselves off if their target UI cannot be found.
+The Shape > Masks tools access the live mesh directly, and Shape > Seam
+Magnetism goes further and patches the brush stroke code itself; both are
+deliberately enabled only for the exact verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0
+binaries, and stay unavailable on another build.
 
 To uninstall, delete msimg32.dll and BSOSImprovements.ini.
 If you update BodySlide, redo this: the files live in its folder.
@@ -182,10 +203,13 @@ tooltip without binding anything, which is what the brush digits need:
 COMPATIBILITY
 -------------
 
-Verified against 5.8.2, developed originally against 5.6.3. Most features use
-standard Windows messages, so other versions should work and anything that
-cannot be found disables itself. The direct mesh access used by Shape > Masks
-is hash-locked to the verified Outfit Studio 5.8.2 executable for safety.
+The standard UI features were source-audited against 6.1.0 and developed
+originally against 5.6.3. Most use standard Windows messages, so other versions
+should work and anything that cannot be found disables itself. The direct mesh access used by Shape > Masks,
+and the brush stroke patch behind Shape > Seam Magnetism, are hash-locked to
+the verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0 executables for safety. Each build
+has a separate address profile. Seam Magnetism checks the disassembly at its
+patch points too, and refuses to install if another mod got there first.
 
 Dark mode is followed. 5.8.2 added a light/dark setting, and everything this
 mod draws itself reads AppearanceMode from BodySlide's own Config.xml, so it

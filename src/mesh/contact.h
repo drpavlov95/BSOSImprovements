@@ -84,3 +84,13 @@ std::vector<ContactCorrection> SolveContacts(const ContactGraph& graph,
 											 const std::vector<ContactMesh>& meshes,
 											 const std::vector<ContactVertex>& moved,
 											 int falloffRings = 1);
+
+// Comprimento medio de aresta da mesh. E a regua para traduzir o raio do pincel
+// em aneis de vizinhanca: uma mesh densa precisa de mais aneis para cobrir a
+// mesma distancia.
+float AverageEdgeLength(const ContactMesh& mesh);
+
+// Quantos aneis de falloff um pincel de raio `radius` merece numa mesh cujas
+// arestas medem `averageEdgeLength`. Nunca menos de um: o contato em si sempre
+// e corrigido. Quem chama e que poe um teto.
+int RingsForRadius(float radius, float averageEdgeLength);

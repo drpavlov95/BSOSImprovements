@@ -173,10 +173,22 @@ HWND PickSliderHost(HWND frame, HWND exclude) {
 	// barra esta sozinha no pai dela, e agrupar por pai direto dava cento e
 	// trinta e um paineis de uma barra cada -- nenhum com as duas que a regra
 	// exige. Era por isso que a tecla nao achava nada.
-	for (int level = 1; level <= 4; ++level) {
+	// Quando o painel de pose existe, estamos no Outfit Studio. Desde a 5.9.0
+	// ele tambem tem paineis de fisica com varias barras filhas diretas. No
+	// nivel 1 esses paineis parecem uma lista de sliders e ganham antes de
+	// chegarmos ao sliderScroll real, que fica no nivel 2 (barra -> linha ->
+	// area rolavel). O BodySlide continua com as barras diretamente na area que
+	// rola e, como nao tem painel de pose, continua comecando no nivel 1.
+	const int firstLevel = exclude ? 2 : 1;
+	for (int level = firstLevel; level <= 4; ++level) {
 		if (HWND host = PickAtLevel(frame, exclude, level))
 			return host;
 	}
+	// Projetos/testes antigos podem ter a lista plana mesmo no Outfit Studio.
+	// O nivel 1 so vira fallback: na 5.9 o sliderScroll real ja ganhou acima,
+	// antes que o painel de fisica pudesse se passar por ele.
+	if (exclude)
+		return PickAtLevel(frame, exclude, 1);
 	return nullptr;
 }
 

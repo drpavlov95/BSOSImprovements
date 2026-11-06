@@ -96,6 +96,13 @@ contract as the Choose Groups search. Clearing the box brings everything back. T
 closes its own gaps because the hiding is done in a way wxWidgets understands, so the
 scrollbar stays honest.
 
+**Filter and sort the "Slider Data" window by field.** The dropdown beside the native
+filter limits a search to one column, such as **Slider**, **Shape**, **Target** or
+**Data Folder(s)**, instead of matching every field at once. Click a column header to
+sort it alphabetically; click the same header again to reverse the order. Filtering and
+sorting preserve Outfit Studio's internal row identity, so **Make Local**, **Make
+External** and **Edit Folders** continue to act on the selected entries.
+
 **Mask mesh seams directly.** **Shape > Masks** contains four one-vertex-wide
 mask tools. **Anatomical Seams** finds the neck, wrist and ankle openings of an
 upright humanoid body while stopping where a connected seam turns back into the
@@ -229,11 +236,13 @@ NegateOffsetX=1
 
 ## Compatibility
 
-- **Verified against 5.8.2**, and developed originally against 5.6.3. Most features use
-  standard Windows messages and disable themselves if their target UI cannot be found.
-  The direct live-mesh access behind **Shape > Masks** is deliberately hash-locked to the
-  verified Outfit Studio 5.8.2 executable; it remains unavailable on another binary
-  rather than risking memory corruption.
+- **The standard UI features were source-audited against 6.1.0** (and developed
+  originally against 5.6.3). Most use standard Windows messages and disable themselves
+  if their target UI cannot be found. The direct live-mesh/code features behind
+  **Shape > Masks** and **Shape > Seam Magnetism** remain deliberately hash-locked to
+  the verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0 executables. Every build has its own
+  address profile and runtime signatures; an unknown binary stays unavailable rather
+  than risking memory corruption.
 - **Dark mode is followed.** 5.8.2 added a light/dark setting, and everything this mod
   draws itself follows it: the Choose Groups replacement and the Batch Build and
   Symmetrize search boxes read `AppearanceMode` from BodySlide's own `Config.xml`, so

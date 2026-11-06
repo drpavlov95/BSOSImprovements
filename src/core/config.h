@@ -49,6 +49,7 @@ struct Config {
 	bool brushResizeDrag = true;
 	bool shortcutTooltips = true;
 	bool symmetrizeSearch = true;
+	bool sliderDataFilter = true;
 	bool mirrorBonePose = true;
 	bool zeroSlidersHotkey = true;
 
@@ -56,6 +57,11 @@ struct Config {
 	// o usuario usa Save/Save As e a correspondencia e inequivoca.
 	bool sliderReorder = true;
 	bool seamMasks = true;
+
+	// O item de menu do magnetismo de seams. Ele aparece desmarcado e nao muda
+	// nada ate ser clicado -- desligar aqui e para quem nao quer nem ver a
+	// opcao, ja que ela mexe no traco do pincel do host.
+	bool seamMagnetism = true;
 
 	// As alcas de arrastar ao lado do lapis. Ligar empurra os controles do
 	// programa uns pixels para a direita para abrir espaco -- nao havia nenhum
@@ -87,6 +93,16 @@ struct Config {
 	// tamanho sao 300 passos de 0.010.
 	float brushResizeSensitivity = 1.0f;
 
+	// Distancia maxima para dois vertices contarem como em contato. Zero
+	// absoluto nao serve: malha vinda de .nif quase nunca coincide exatamente.
+	// Grande demais gruda o que nao devia -- mas quem escolhe as meshes e o
+	// usuario, entao o custo de errar para cima e menor.
+	float seamMagnetismTolerance = 0.01f;
+
+	// Ate onde a correcao se espalha para dentro da mesh que segue, em aneis de
+	// vizinhanca. Um nao espalha nada, e o anel corrigido vira uma dobra.
+	int seamMagnetismRings = 3;
+
 	// Quantos passos a forca tem de ponta a ponta.
 	//
 	// O do tamanho esta no codigo do Outfit Studio e vale 300; o da forca nao
@@ -95,11 +111,6 @@ struct Config {
 	// cancelar aplicaria de volta passos que nunca surtiram efeito, deixando o
 	// brush mais fraco do que comecou. Por isso o default e conservador.
 	int brushStrengthSteps = 100;
-
-	// Raio da corda do estabilizador de traco, em pixels. Zero desliga.
-	//
-	// Comeca desligado pelo mesmo motivo da camera: ele nao acrescenta nada,
-	// ele muda como o pincel responde a mao de quem ja esta acostumado.
 
 	std::vector<RemapEntry> remaps;
 
@@ -123,13 +134,6 @@ struct Config {
 	// usuario.
 	bool dumpWindows = false;
 
-	// [Debug] WeldProbe: instrumentacao descartavel em Shape > Weld Probe, para
-	// medir tres coisas do host antes de desenhar o magnetismo de seams -- se o
-	// pincel le Mesh::norms, quando o host as recalcula, e se uma escrita em
-	// Mesh::verts chega no modelo de dados.
-	//
-	// Sai junto com weld_probe.cpp quando as respostas estiverem no lugar.
-	bool weldProbe = false;
 };
 
 // Le uma secao de linhas "xrcName=tecla". Entradas com hotkey invalida sao

@@ -11,6 +11,8 @@
 #include "core/log.h"
 #include "core/osp.h"
 #include "core/theme.h"
+#include "core/ui_thread.h"
+#include "features/native_project_state.h"
 #include "features/pose_panel.h"
 #include "features/zero_sliders.h" // PickSliderHost
 #include "win32/menu_toggle.h"
@@ -44,6 +46,8 @@ bool g_installed = false;
 UINT g_saveId = 0;
 UINT g_saveAsId = 0;
 UINT g_exitId = 0;
+bool g_saveObserverInstalled = false;
+bool g_fallbackFrameSubclassed = false;
 bool g_orderDirty = false;
 bool g_titleMarked = false;
 std::vector<std::wstring> g_desiredOrder;
@@ -58,35 +62,36 @@ struct FileStamp {
 using OspSnapshot = std::map<std::filesystem::path, FileStamp>;
 
 std::filesystem::path SliderSetsFolder() {
-	// ProjectUtil prefere o AppDir sempre que ele contem SliderSets. Essa e a
-	// instalacao normal e tambem o caminho que passa pelo VFS do MO2.
 	return std::filesystem::path(AppDir()) / L"SliderSets";
 }
 
 OspSnapshot SnapshotOspFiles() {
 	OspSnapshot out;
-	std::error_code ec;
+	std::error_code error;
 	const auto root = SliderSetsFolder();
-	if (!std::filesystem::is_directory(root, ec))
+	if (!std::filesystem::is_directory(root, error))
 		return out;
-	for (std::filesystem::recursive_directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
-		if (!it->is_regular_file(ec) || _wcsicmp(it->path().extension().c_str(), L".osp") != 0)
+	for (std::filesystem::recursive_directory_iterator it(root, error), end;
+		 it != end && !error; it.increment(error)) {
+		if (!it->is_regular_file(error) ||
+			_wcsicmp(it->path().extension().c_str(), L".osp") != 0)
 			continue;
 		FileStamp stamp;
-		stamp.size = it->file_size(ec);
-		stamp.written = it->last_write_time(ec);
-		if (!ec)
+		stamp.size = it->file_size(error);
+		stamp.written = it->last_write_time(error);
+		if (!error)
 			out.emplace(it->path(), stamp);
 	}
 	return out;
 }
 
-std::vector<std::filesystem::path> ChangedOspFiles(const OspSnapshot& before,
-												 const OspSnapshot& after) {
+std::vector<std::filesystem::path> ChangedOspFiles(
+	const OspSnapshot& before, const OspSnapshot& after) {
 	std::vector<std::filesystem::path> changed;
 	for (const auto& [path, stamp] : after) {
 		auto old = before.find(path);
-		if (old == before.end() || old->second.size != stamp.size || old->second.written != stamp.written)
+		if (old == before.end() || old->second.size != stamp.size ||
+			old->second.written != stamp.written)
 			changed.push_back(path);
 	}
 	return changed;
@@ -99,7 +104,37 @@ std::string ReadBytes(const std::filesystem::path& path) {
 	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
-bool ReplaceBytesAtomically(const std::filesystem::path& path, const std::string& bytes) {
+bool WriteBytesDirectly(const std::filesystem::path& path, const std::string& bytes) {
+	HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+		return false;
+
+	LARGE_INTEGER start = {};
+	bool ok = SetFilePointerEx(file, start, nullptr, FILE_BEGIN) != FALSE;
+	size_t offset = 0;
+	while (ok && offset < bytes.size()) {
+		DWORD written = 0;
+		const DWORD part = static_cast<DWORD>(std::min<size_t>(
+			bytes.size() - offset, 0x40000000u));
+		ok = WriteFile(file, bytes.data() + offset, part, &written, nullptr) != FALSE &&
+			written == part;
+		offset += written;
+	}
+	if (ok)
+		ok = SetEndOfFile(file) != FALSE;
+	if (ok)
+		ok = FlushFileBuffers(file) != FALSE;
+	const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+	CloseHandle(file);
+	if (!ok)
+		SetLastError(error);
+	return ok;
+}
+
+bool ReplaceBytesAtomically(const std::filesystem::path& path, const std::string& bytes,
+							DWORD& replaceError) {
+	replaceError = ERROR_SUCCESS;
 	wchar_t temp[MAX_PATH] = {};
 	const std::wstring folder = path.parent_path().wstring();
 	if (folder.size() >= MAX_PATH || !GetTempFileNameW(folder.c_str(), L"bso", 0, temp))
@@ -119,8 +154,11 @@ bool ReplaceBytesAtomically(const std::filesystem::path& path, const std::string
 		ok = FlushFileBuffers(file) != FALSE;
 	if (file != INVALID_HANDLE_VALUE)
 		CloseHandle(file);
-	if (ok)
+	if (ok) {
 		ok = ReplaceFileW(path.c_str(), temp, nullptr, REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE;
+		if (!ok)
+			replaceError = GetLastError();
+	}
 	if (!ok)
 		DeleteFileW(temp);
 	return ok;
@@ -144,35 +182,102 @@ std::vector<std::string> NarrowOrder() {
 	return out;
 }
 
-bool PersistOrderAfterSave(const OspSnapshot& before) {
+bool PersistOrderAfterSuccessfulSave(HWND frame) {
 	if (g_desiredOrder.empty())
 		return false;
-	const auto changed = ChangedOspFiles(before, SnapshotOspFiles());
-	if (changed.size() != 1) {
-		LogF("reorder: save terminou com %d arquivos .osp alterados; persistencia recusada",
-			 static_cast<int>(changed.size()));
+
+	std::filesystem::path savedPath;
+	if (frame && IsWindow(frame))
+		NativeProjectState::CurrentProjectFile(frame, savedPath);
+	if (savedPath.empty() || _wcsicmp(savedPath.extension().c_str(), L".osp") != 0) {
+		LogF("reorder: Save teve sucesso, mas o caminho .osp nativo nao foi identificado");
 		return false;
 	}
 
-	const std::string original = ReadBytes(changed.front());
+	const std::string original = ReadBytes(savedPath);
 	const std::vector<std::string> order = NarrowOrder();
 	std::string matched;
 	const std::string reordered = ReorderUniqueMatchingOspSliderSet(original, order, &matched);
 	if (reordered.empty()) {
 		LogF("reorder: %ls nao possui um unico SliderSet com os %d sliders da tela",
-			 changed.front().c_str(), static_cast<int>(order.size()));
+			 savedPath.c_str(), static_cast<int>(order.size()));
 		return false;
 	}
-	if (reordered != original && !ReplaceBytesAtomically(changed.front(), reordered)) {
-		LogF("reorder: falha ao substituir %ls atomicamente (erro %lu)",
-			 changed.front().c_str(), GetLastError());
+	if (reordered != original) {
+		DWORD replaceError = ERROR_SUCCESS;
+		if (!ReplaceBytesAtomically(savedPath, reordered, replaceError)) {
+			// O USVFS do Mod Organizer permite que o proprio Outfit Studio grave
+			// este caminho virtual, mas nao implementa corretamente ReplaceFileW:
+			// ele devolve ERROR_UNABLE_TO_REMOVE_REPLACED (1175). Reabrir o MESMO
+			// arquivo com OPEN_EXISTING segue a redirecao normal do MO2 e equivale
+			// ao modo como SliderSetFile acabou de salva-lo.
+			LogF("reorder: ReplaceFileW recusado (erro %lu); tentando escrita direta compativel com VFS",
+				replaceError);
+			if (!WriteBytesDirectly(savedPath, reordered)) {
+				const DWORD directError = GetLastError();
+				// O original ainda esta em memoria. Se houve uma escrita parcial,
+				// restaura-lo e melhor do que deixar XML truncado.
+				WriteBytesDirectly(savedPath, original);
+				LogF("reorder: escrita direta falhou em %ls (erro %lu)",
+					savedPath.c_str(), directError);
+				return false;
+			}
+			LogF("reorder: escrita direta pelo VFS concluida");
+		}
+	}
+
+	g_orderDirty = false;
+	LogF("reorder: ordem salva em %ls, SliderSet '%s'", savedPath.c_str(), matched.c_str());
+	return true;
+}
+
+// Caminho conservador para builds cujo layout nativo ainda nao foi medido.
+// O Save do wx e sincrono: fotografamos os .osp antes do comando e, quando ele
+// volta, aceitamos somente um unico arquivo alterado. Assim 5.9.x continua
+// funcional sem usar offsets da 5.8.2 em outro executavel.
+bool PersistOrderAfterFallbackSave(const OspSnapshot& before) {
+	if (g_desiredOrder.empty())
 		return false;
+	const auto changed = ChangedOspFiles(before, SnapshotOspFiles());
+	if (changed.size() != 1) {
+		LogF("reorder fallback: Save alterou %d arquivos .osp; persistencia recusada",
+			static_cast<int>(changed.size()));
+		return false;
+	}
+
+	const std::filesystem::path& path = changed.front();
+	const std::string original = ReadBytes(path);
+	const std::vector<std::string> order = NarrowOrder();
+	std::string matched;
+	const std::string reordered = ReorderUniqueMatchingOspSliderSet(original, order, &matched);
+	if (reordered.empty()) {
+		LogF("reorder fallback: %ls nao possui um unico SliderSet com os %d sliders da tela",
+			path.c_str(), static_cast<int>(order.size()));
+		return false;
+	}
+	if (reordered != original) {
+		DWORD replaceError = ERROR_SUCCESS;
+		if (!ReplaceBytesAtomically(path, reordered, replaceError) &&
+			!WriteBytesDirectly(path, reordered)) {
+			const DWORD directError = GetLastError();
+			WriteBytesDirectly(path, original);
+			LogF("reorder fallback: falha ao gravar %ls (ReplaceFile=%lu, direto=%lu)",
+				path.c_str(), replaceError, directError);
+			return false;
+		}
 	}
 
 	g_orderDirty = false;
 	ClearOrderTitleMark();
-	LogF("reorder: ordem salva em %ls, SliderSet '%s'", changed.front().c_str(), matched.c_str());
+	LogF("reorder fallback: ordem salva em %ls, SliderSet '%s'", path.c_str(), matched.c_str());
 	return true;
+}
+
+void OnSuccessfulNativeSave(void*) {
+	if (!g_orderDirty || g_desiredOrder.empty())
+		return;
+	LogF("reorder: Save nativo confirmou sucesso; persistindo a ordem");
+	PersistOrderAfterSuccessfulSave(g_frame);
 }
 
 void EnableSaveForOrder() {
@@ -187,16 +292,12 @@ void EnableSaveForOrder() {
 void MarkTitleForOrder() {
 	if (!g_frame || g_titleMarked)
 		return;
-	std::wstring title;
 	const int count = GetWindowTextLengthW(g_frame);
-	title.resize(static_cast<size_t>(count > 0 ? count : 0) + 1, L'\0');
+	std::wstring title(static_cast<size_t>(count > 0 ? count : 0) + 1, L'\0');
 	const int written = GetWindowTextW(g_frame, title.data(), static_cast<int>(title.size()));
 	title.resize(written > 0 ? static_cast<size_t>(written) : 0);
 	const size_t suffix = title.rfind(L" - Outfit Studio");
-	if (suffix == std::wstring::npos)
-		return;
-	// Se o Outfit Studio ja marcou o projeto, o prompt nativo cuidara dele.
-	if (suffix > 0 && title[suffix - 1] == L'*')
+	if (suffix == std::wstring::npos || (suffix > 0 && title[suffix - 1] == L'*'))
 		return;
 	title.insert(suffix, 1, L'*');
 	SetWindowTextW(g_frame, title.c_str());
@@ -1104,8 +1205,14 @@ void FinishDrag(bool cancelled) {
 		}
 		g_desiredOrder = SpliceOrder(FullNameOrder(g_drag.host), subsetOrder);
 		g_orderDirty = true;
+		if (g_saveObserverInstalled) {
+			if (!NativeProjectState::MarkPending(g_frame))
+				LogF("reorder: Outfit Studio nao aceitou o dirty flag nativo");
+		}
+		else {
+			MarkTitleForOrder();
+		}
 		EnableSaveForOrder();
-		MarkTitleForOrder();
 	}
 
 	if (g_drag.host && IsWindow(g_drag.host))
@@ -1126,53 +1233,78 @@ void OnGripsToggled(bool checked) {
 bool PromptToSaveOrder(HWND hwnd) {
 	if (!g_orderDirty)
 		return true;
-
 	const int answer = MessageBoxW(hwnd,
 		L"The slider order has unsaved changes. Would you like to save them now?",
 		L"Unsaved Changes", MB_YESNOCANCEL | MB_ICONWARNING);
 	if (answer == IDCANCEL)
 		return false;
 	if (answer == IDYES) {
-		const UINT saveCommand = g_saveId ? g_saveId : g_saveAsId;
-		if (saveCommand)
-			SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(saveCommand, 0), 0);
-		return !g_orderDirty; // Save cancelado, falhou ou nao encontrou o .osp
+		const UINT command = g_saveId ? g_saveId : g_saveAsId;
+		if (command)
+			SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+		return !g_orderDirty;
 	}
-
 	g_orderDirty = false;
 	ClearOrderTitleMark();
 	return true;
 }
 
-LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
-						   UINT_PTR id, DWORD_PTR) {
+LRESULT CALLBACK FallbackFrameProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+								   UINT_PTR id, DWORD_PTR) {
 	if (msg == WM_NCDESTROY) {
-		RemoveWindowSubclass(hwnd, FrameProc, id);
+		RemoveWindowSubclass(hwnd, FallbackFrameProc, id);
+		g_fallbackFrameSubclassed = false;
 		return DefSubclassProc(hwnd, msg, wParam, lParam);
 	}
 
-	const UINT command = (msg == WM_COMMAND) ? LOWORD(wParam) : 0;
-	const bool closeCommand = (msg == WM_CLOSE) ||
-		(msg == WM_SYSCOMMAND && ((wParam & 0xFFF0u) == SC_CLOSE)) ||
-		(command != 0 && command == g_exitId);
-	if (closeCommand && !PromptToSaveOrder(hwnd))
+	const UINT command = msg == WM_COMMAND ? LOWORD(wParam) : 0;
+	const bool closing = msg == WM_CLOSE ||
+		(msg == WM_SYSCOMMAND && (wParam & 0xFFF0u) == SC_CLOSE) ||
+		(command && command == g_exitId);
+	if (closing && !PromptToSaveOrder(hwnd))
 		return 0;
 
-	const bool save = command != 0 && (command == g_saveId || command == g_saveAsId);
+	const bool saving = command && (command == g_saveId || command == g_saveAsId);
 	OspSnapshot before;
-	if (save && !g_desiredOrder.empty())
+	if (saving && !g_desiredOrder.empty())
 		before = SnapshotOspFiles();
-
-	// O handler nativo precisa salvar primeiro. Save As inclusive mantem o
-	// dialogo modal dentro desta chamada; quando ela volta o arquivo final ja
-	// existe e e seguro identifica-lo pela mudanca no snapshot.
 	const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
-	if (save && !g_desiredOrder.empty()) {
-		PersistOrderAfterSave(before);
+	if (saving && !g_desiredOrder.empty()) {
+		PersistOrderAfterFallbackSave(before);
 		if (g_orderDirty)
-			EnableSaveForOrder(); // cancelamento ou recusa: continua salvavel
+			EnableSaveForOrder();
 	}
 	return result;
+}
+
+void InstallFrameHooksHere(void*) {
+	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
+	if (HMENU bar = GetMenu(g_frame)) {
+		const MenuTrail save = ResolveMenuTrail(xrc.c_str(), "fileSave");
+		const MenuTrail saveAs = ResolveMenuTrail(xrc.c_str(), "fileSaveAs");
+		const MenuTrail exit = ResolveMenuTrail(xrc.c_str(), "fileExit");
+		g_saveId = save.empty() ? 0 : CommandIdAtLabeledPath(bar, save.path, save.labels);
+		g_saveAsId = saveAs.empty() ? 0 : CommandIdAtLabeledPath(bar, saveAs.path, saveAs.labels);
+		g_exitId = exit.empty() ? 0 : CommandIdAtLabeledPath(bar, exit.path, exit.labels);
+	}
+	g_saveObserverInstalled = NativeProjectState::ObserveSuccessfulSaves(OnSuccessfulNativeSave);
+	if (!g_saveObserverInstalled) {
+		g_fallbackFrameSubclassed = SetWindowSubclass(
+			g_frame, FallbackFrameProc, kFrameSubclassId, 0) != FALSE;
+		LogF("reorder: build sem ponte nativa; fallback de Save/Save As %s",
+			g_fallbackFrameSubclassed ? "instalado" : "FALHOU");
+		return;
+	}
+	LogF("reorder: observando o sucesso nativo de Save/Save As; Save=%u", g_saveId);
+}
+
+void RemoveFrameHooksHere(void*) {
+	if (g_saveObserverInstalled)
+		NativeProjectState::ObserveSuccessfulSaves(nullptr);
+	if (g_fallbackFrameSubclassed && g_frame && IsWindow(g_frame))
+		RemoveWindowSubclass(g_frame, FallbackFrameProc, kFrameSubclassId);
+	g_saveObserverInstalled = false;
+	g_fallbackFrameSubclassed = false;
 }
 
 } // namespace
@@ -1292,19 +1424,12 @@ bool Install(HWND frame) {
 	g_gripsOn = Cfg().sliderDragHandles;
 	g_dark = DetectAppearance(AppDir()) == Appearance::Dark;
 	g_orderDirty = false;
+	g_saveObserverInstalled = false;
+	g_fallbackFrameSubclassed = false;
 	g_titleMarked = false;
 
-	const std::wstring xrc = AppDir() + L"res\\xrc\\OutfitStudio.xrc";
-	if (HMENU bar = GetMenu(frame)) {
-		const MenuTrail save = ResolveMenuTrail(xrc.c_str(), "fileSave");
-		const MenuTrail saveAs = ResolveMenuTrail(xrc.c_str(), "fileSaveAs");
-		const MenuTrail exit = ResolveMenuTrail(xrc.c_str(), "fileExit");
-		g_saveId = save.empty() ? 0 : CommandIdAtLabeledPath(bar, save.path, save.labels);
-		g_saveAsId = saveAs.empty() ? 0 : CommandIdAtLabeledPath(bar, saveAs.path, saveAs.labels);
-		g_exitId = exit.empty() ? 0 : CommandIdAtLabeledPath(bar, exit.path, exit.labels);
-	}
-	if (!SetWindowSubclass(frame, FrameProc, kFrameSubclassId, 0))
-		LogF("reorder: nao consegui observar Save/Save As");
+	if (!RunOnUiThread(frame, InstallFrameHooksHere, nullptr))
+		LogF("reorder: nao consegui entrar na thread da UI para observar Save/Save As");
 
 	if (HMENU view = MenuToggle::FindMenu(frame, "menuView"))
 		MenuToggle::Add(frame, view, L"Slider drag handles", g_gripsOn, OnGripsToggled);
@@ -1338,8 +1463,12 @@ void Uninstall() {
 			RemoveGrip(window);
 		RemoveWindowSubclass(g_knownHost, HostProc, kHostSubclassId);
 	}
-	if (g_frame && IsWindow(g_frame))
-		RemoveWindowSubclass(g_frame, FrameProc, kFrameSubclassId);
+	if (g_saveObserverInstalled || g_fallbackFrameSubclassed) {
+		if (g_frame && IsWindow(g_frame))
+			RunOnUiThread(g_frame, RemoveFrameHooksHere, nullptr);
+		else
+			NativeProjectState::ObserveSuccessfulSaves(nullptr);
+	}
 
 	g_frame = nullptr;
 	g_posePanel = nullptr;
@@ -1349,6 +1478,8 @@ void Uninstall() {
 	g_saveId = 0;
 	g_saveAsId = 0;
 	g_exitId = 0;
+	g_saveObserverInstalled = false;
+	g_fallbackFrameSubclassed = false;
 	g_orderDirty = false;
 	g_titleMarked = false;
 	g_drag = Drag();

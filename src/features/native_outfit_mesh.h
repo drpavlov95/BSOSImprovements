@@ -16,8 +16,8 @@ enum class Result {
 	InvalidLayout,
 };
 
-// Esta ponte e deliberadamente especifica para o Outfit Studio 5.8.2 cujo
-// SHA-256 esta gravado no .cpp. Nada e lido ou escrito se o arquivo mudar.
+// Esta ponte e deliberadamente especifica para as builds verificadas cujos
+// SHA-256 e layouts foram medidos. Nada e lido ou escrito se o arquivo mudar.
 bool SupportsRunningBinary();
 
 struct Snapshot {

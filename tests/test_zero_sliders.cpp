@@ -215,6 +215,31 @@ TEST(FindsTheHostWhenEachSliderSitsInItsOwnRowPanel) {
 	return true;
 }
 
+TEST(OutfitStudio59PhysicsSlidersDoNotHijackTheProjectSliders) {
+	HWND frame = MakeFrame();
+	TEST_ASSERT(frame != nullptr);
+
+	// 5.9 acrescentou um painel de fisica com varias barras diretamente no
+	// mesmo pai. Ele aparece no nivel 1; a lista do projeto continua na forma
+	// barra -> linha -> sliderScroll, portanto so aparece no nivel 2.
+	HWND pose = MakePanel(frame, false, 7, 0);
+	HWND physics = MakePanel(frame, false, 5, 220);
+	HWND scroll = MakePanel(frame, true, 0, 440);
+	TEST_ASSERT(pose && physics && scroll);
+	for (int i = 0; i < 6; ++i) {
+		HWND row = CreateWindowExW(0, L"BSOSZeroHost", L"",
+			WS_CHILD | WS_VISIBLE, 0, i * 25, 200, 20, scroll, nullptr,
+			GetModuleHandleW(nullptr), nullptr);
+		TEST_ASSERT(row != nullptr);
+		CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE,
+			40, 0, 150, 20, row, nullptr, GetModuleHandleW(nullptr), nullptr);
+	}
+
+	TEST_ASSERT(PickSliderHost(frame, pose) == scroll);
+	DestroyWindow(frame);
+	return true;
+}
+
 TEST(SurvivesAFrameWithoutSliders) {
 	TEST_ASSERT(PickSliderHost(nullptr, nullptr) == nullptr);
 

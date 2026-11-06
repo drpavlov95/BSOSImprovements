@@ -325,3 +325,28 @@ TEST(BuildingTheGraphOfTwoBodySizedMeshesStaysInteractive) {
 	TEST_ASSERT(elapsed < 1000);
 	return true;
 }
+
+TEST(AverageEdgeLengthMeasuresTheMeshDensity) {
+	Piece triangle;
+	triangle.positions = {{0, 0, 0}, {2, 0, 0}, {0, 2, 0}};
+	triangle.triangles = {0, 1, 2};
+
+	// Lados 2, 2 e 2.828: media 2.276.
+	const float average = AverageEdgeLength(triangle.Ref());
+	TEST_ASSERT(average > 2.27f && average < 2.28f);
+	return true;
+}
+
+TEST(RingsFollowTheBrushRadiusMeasuredInEdges) {
+	// Um pincel que cobre cinco arestas espalha por cinco aneis.
+	TEST_ASSERT(RingsForRadius(5.0f, 1.0f) == 5);
+	TEST_ASSERT(RingsForRadius(2.5f, 0.5f) == 5);
+
+	// Menor que uma aresta ainda corrige o contato, sem espalhar.
+	TEST_ASSERT(RingsForRadius(0.2f, 1.0f) == 1);
+	TEST_ASSERT(RingsForRadius(0.0f, 1.0f) == 1);
+
+	// Mesh sem aresta nenhuma nao da para medir: nao espalha.
+	TEST_ASSERT(RingsForRadius(5.0f, 0.0f) == 1);
+	return true;
+}
