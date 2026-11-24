@@ -162,8 +162,8 @@ The standard UI features were source-audited against 6.1.0. Most use standard
 Windows messages and turn themselves off if their target UI cannot be found.
 The Shape > Masks tools access the live mesh directly, and Shape > Seam
 Magnetism goes further and patches the brush stroke code itself; both are
-deliberately enabled only for the exact verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0
-binaries, and stay unavailable on another build.
+deliberately enabled only for the exact verified Outfit Studio 5.8.2, 5.9.1,
+6.1.0 and 6.2.0 binaries, and stay unavailable on any other build.
 
 To uninstall, delete msimg32.dll and BSOSImprovements.ini.
 If you update BodySlide, redo this: the files live in its folder.
@@ -205,11 +205,12 @@ COMPATIBILITY
 
 The standard UI features were source-audited against 6.1.0 and developed
 originally against 5.6.3. Most use standard Windows messages, so other versions
-should work and anything that cannot be found disables itself. The direct mesh access used by Shape > Masks,
-and the brush stroke patch behind Shape > Seam Magnetism, are hash-locked to
-the verified Outfit Studio 5.8.2, 5.9.1 and 6.1.0 executables for safety. Each build
-has a separate address profile. Seam Magnetism checks the disassembly at its
-patch points too, and refuses to install if another mod got there first.
+should work and anything that cannot be found disables itself. The direct mesh
+access used by Shape > Masks, and the brush stroke patch behind Shape > Seam
+Magnetism, are hash-locked to the verified Outfit Studio 5.8.2, 5.9.1, 6.1.0
+and 6.2.0 executables for safety. Each build has a separate address profile.
+Seam Magnetism checks the disassembly at its patch points too, and refuses to
+install if another mod got there first.
 
 Dark mode is followed. 5.8.2 added a light/dark setting, and everything this
 mod draws itself reads AppearanceMode from BodySlide's own Config.xml, so it

@@ -20,8 +20,36 @@
 
 namespace {
 
+// Prologo de updateStroke. O primeiro `mov [rsp+0x10], rdx` e o que salva o
+// pickInfo antes de empurrar os registradores preservados. Em todas as
+// builds reconhecidas ate aqui, o MSVC emite exatamente estes 22 bytes.
+constexpr std::array<unsigned char, 22> kUpdateStrokePrologue = {
+	0x48, 0x89, 0x54, 0x24, 0x10,             // mov [rsp+10h], rdx
+	0x48, 0x89, 0x4C, 0x24, 0x08,             // mov [rsp+08h], rcx
+	0x55, 0x53, 0x56, 0x57,                   // push rbp, rbx, rsi, rdi
+	0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 // push r12..r15
+};
+
+// Dois prologos distintos de try_emplace. Ate 6.1.0 o MSVC salvava 8
+// non-volatile registradores e abria 0x38 bytes de frame; em 6.2.0 ele deixa
+// de salvar r13 (nao usado no corpo) e abre so 0x30. A validacao de hook
+// escolhe o prologo a partir do perfil, so instalando quando bate exato.
+constexpr std::array<unsigned char, 17> kTryEmplacePrologueLegacy = {
+	0x40, 0x53, 0x55, 0x56, 0x57,                   // push rbx, rbp, rsi, rdi
+	0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push r12..r15
+	0x48, 0x83, 0xEC, 0x38                          // sub rsp, 38h
+};
+
+constexpr std::array<unsigned char, 15> kTryEmplacePrologue620 = {
+	0x40, 0x53, 0x55, 0x56, 0x57,                   // push rbx, rbp, rsi, rdi
+	0x41, 0x54, 0x41, 0x56, 0x41, 0x57,             // push r12, r14, r15
+	0x48, 0x83, 0xEC, 0x30                          // sub rsp, 30h
+};
+
 // RVAs medidos nas builds exatas reconhecidas por SHA-256. Cada endereco e
-// conferido contra a desmontagem antes de qualquer escrita.
+// conferido contra a desmontagem antes de qualquer escrita. O ponteiro
+// tryEmplacePrologue aponta para o array esperado nessa build -- nao e
+// uniforme entre versoes porque o otimizador pode poupar registradores.
 struct NativeProfile {
 	uintptr_t updateStrokeThunkRva;
 	uintptr_t updateStrokeBodyRva;
@@ -33,18 +61,22 @@ struct NativeProfile {
 	size_t meshVerticesOffset;
 	size_t meshTrianglesOffset;
 	size_t meshTriangleCountOffset;
+	const unsigned char* tryEmplacePrologue;
+	size_t tryEmplacePrologueSize;
 };
 
 constexpr NativeProfile kProfile582 = {
 	0x02E7B2, 0x611F40, 0x00C0E0, 0x5E2A20,
 	{0x898D98, 0x89FBEB, 0x8A41C3, 0x8A6BA6},
-	0x290, 180, 184, 256, 272
+	0x290, 180, 184, 256, 272,
+	kTryEmplacePrologueLegacy.data(), kTryEmplacePrologueLegacy.size()
 };
 
 constexpr NativeProfile kProfile591 = {
 	0x032934, 0x705580, 0x00D13E, 0x6D6100,
 	{0x97D0B8, 0x984C1B, 0x98A323, 0x98CF16},
-	0x290, 180, 184, 256, 272
+	0x290, 180, 184, 256, 272,
+	kTryEmplacePrologueLegacy.data(), kTryEmplacePrologueLegacy.size()
 };
 
 // 6.1 introduced extra Mesh fields and two cloth-source fields in the undo
@@ -53,7 +85,21 @@ constexpr NativeProfile kProfile591 = {
 constexpr NativeProfile kProfile610 = {
 	0x03B0AC, 0x837D90, 0x00F263, 0x80C150,
 	{0xB263E3, 0xB29A66, 0xB7BFB3, 0xB7EDF2},
-	0x2C0, 180, 184, 272, 288
+	0x2C0, 180, 184, 272, 288,
+	kTryEmplacePrologueLegacy.data(), kTryEmplacePrologueLegacy.size()
+};
+
+// 6.2.0: a UndoStateShape ganhou `bool hasLodsBefore` + um vector de LODs
+// Starfield antes dos clothSources, empurrando o size do shape em +32 bytes
+// (0x2C0 -> 0x2E0). A Mesh em si nao ganhou campo novo antes de nTris, entao
+// os offsets usados pelo mod sao iguais aos de 6.1.0. Os RVAs foram medidos
+// no binario 6.2.0 oficial (hash em host_build.cpp) via symbols CI + pattern
+// matching; o prologo reduzido do helper esta em kTryEmplacePrologue620.
+constexpr NativeProfile kProfile620 = {
+	0x03AADF, 0x11C4C10, 0x0653DE, 0x11A1A20,
+	{0x2E8F43, 0x2E9074, 0x571D0D, 0x574F32},
+	0x2E0, 180, 184, 272, 288,
+	kTryEmplacePrologue620.data(), kTryEmplacePrologue620.size()
 };
 
 const NativeProfile* RunningProfile() {
@@ -61,24 +107,10 @@ const NativeProfile* RunningProfile() {
 		case HostBuild::OutfitStudioBuild::V5_8_2: return &kProfile582;
 		case HostBuild::OutfitStudioBuild::V5_9_1: return &kProfile591;
 		case HostBuild::OutfitStudioBuild::V6_1_0: return &kProfile610;
+		case HostBuild::OutfitStudioBuild::V6_2_0: return &kProfile620;
 		default: return nullptr;
 	}
 }
-
-// Prologo de updateStroke. O primeiro `mov [rsp+0x10], rdx` e o que salva o
-// pickInfo antes de empurrar os registradores preservados.
-constexpr std::array<unsigned char, 22> kUpdateStrokePrologue = {
-	0x48, 0x89, 0x54, 0x24, 0x10,             // mov [rsp+10h], rdx
-	0x48, 0x89, 0x4C, 0x24, 0x08,             // mov [rsp+08h], rcx
-	0x55, 0x53, 0x56, 0x57,                   // push rbp, rbx, rsi, rdi
-	0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 // push r12..r15
-};
-
-constexpr std::array<unsigned char, 17> kTryEmplacePrologue = {
-	0x40, 0x53, 0x55, 0x56, 0x57,             // push rbx, rbp, rsi, rdi
-	0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push r12..r15
-	0x48, 0x83, 0xEC, 0x38                    // sub rsp, 38h
-};
 
 // Campos de TweakStroke.
 constexpr size_t kStrokeMeshesBegin = 0x00;
@@ -708,9 +740,11 @@ bool InstallHook() {
 		return false;
 	}
 	if (!RelativeBranchTargets(tryEmplaceThunk, 0xE9, tryEmplaceBody) ||
-		!RangeReadable(tryEmplaceBody, kTryEmplacePrologue.size()) ||
-		std::memcmp(reinterpret_cast<const void*>(tryEmplaceBody), kTryEmplacePrologue.data(),
-					kTryEmplacePrologue.size()) != 0) {
+		!g_profile->tryEmplacePrologue || g_profile->tryEmplacePrologueSize == 0 ||
+		!RangeReadable(tryEmplaceBody, g_profile->tryEmplacePrologueSize) ||
+		std::memcmp(reinterpret_cast<const void*>(tryEmplaceBody),
+					g_profile->tryEmplacePrologue,
+					g_profile->tryEmplacePrologueSize) != 0) {
 		LogF("magnetismo: assinatura do helper de undo nao confere");
 		return false;
 	}
@@ -896,8 +930,11 @@ namespace SeamMagnetism {
 bool Enable(float tolerance, int falloffRings) {
 	if (g_enabled)
 		return true;
-	if (!HostBuild::IsSupportedOutfitStudio()) {
-		LogF("magnetismo: build do host nao reconhecida; nada instalado");
+	// Reconhecer a build (hash OK) nao basta: 6.2.0 entra como `Unsupported`
+	// aqui enquanto os offsets de patch nao forem medidos, mesmo que o resto
+	// da DLL ja carregue. RunningProfile() == nullptr e o criterio honesto.
+	if (!RunningProfile()) {
+		LogF("magnetismo: build do host sem perfil de offsets; nada instalado");
 		return false;
 	}
 	if (!(tolerance > 0.0f) || falloffRings < 1) {
@@ -931,7 +968,9 @@ bool IsEnabled() {
 
 bool Install(HWND frame, float tolerance, int falloffRings) {
 	Uninstall();
-	if (!frame || !HostBuild::IsSupportedOutfitStudio())
+	// Mesma logica do Enable(): build sem perfil nao chega a oferecer o item
+	// de menu. Aparecer e falhar ao clicar e pior do que nao aparecer.
+	if (!frame || !RunningProfile())
 		return false;
 	g_frame = frame;
 	g_menuTolerance = tolerance;

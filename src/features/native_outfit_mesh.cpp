@@ -24,12 +24,19 @@ struct NativeProfile {
 constexpr NativeProfile kProfile582 = {0x199F2F8, 180, 184, 232, 240, 256, 272};
 constexpr NativeProfile kProfile591 = {0x1BEBC48, 180, 184, 232, 240, 256, 272};
 constexpr NativeProfile kProfile610 = {0x214A618, 180, 184, 232, 248, 272, 288};
+// 6.2.0: campos de Mesh antes de nTris nao mudaram no source (so o bloco GL
+// e o cullMode trocaram de tipo, ambos depois dos campos lidos aqui), entao
+// os offsets batem com 6.1.0. O vtable do wxGLPanel foi achado por RTTI no
+// binario oficial (string ".?AVwxGLPanel@@" aponta para o Complete Object
+// Locator, cujo endereco antecede a vtable).
+constexpr NativeProfile kProfile620 = {0x21397B0, 180, 184, 232, 248, 272, 288};
 
 const NativeProfile* RunningProfile() {
 	switch (HostBuild::CurrentOutfitStudio()) {
 		case HostBuild::OutfitStudioBuild::V5_8_2: return &kProfile582;
 		case HostBuild::OutfitStudioBuild::V5_9_1: return &kProfile591;
 		case HostBuild::OutfitStudioBuild::V6_1_0: return &kProfile610;
+		case HostBuild::OutfitStudioBuild::V6_2_0: return &kProfile620;
 		default: return nullptr;
 	}
 }

@@ -30,6 +30,13 @@ constexpr std::array<unsigned char, 32> kOutfitStudio610Sha256 = {
 	0x49, 0xA5, 0xB3, 0xF7, 0x14, 0x8B, 0x20, 0x2C,
 };
 
+constexpr std::array<unsigned char, 32> kOutfitStudio620Sha256 = {
+	0xEE, 0xBE, 0xFE, 0x8C, 0x59, 0xDF, 0x08, 0xFE,
+	0x51, 0xE3, 0x45, 0x2A, 0x0E, 0xF1, 0xC7, 0xD8,
+	0x53, 0x3F, 0x05, 0x37, 0x2E, 0x5D, 0x57, 0xEB,
+	0x6E, 0xA7, 0x91, 0x3E, 0x01, 0x6C, 0xFC, 0xA4,
+};
+
 bool g_checked = false;
 HostBuild::OutfitStudioBuild g_build = HostBuild::OutfitStudioBuild::Unsupported;
 
@@ -89,6 +96,8 @@ OutfitStudioBuild CurrentOutfitStudio() {
 			g_build = OutfitStudioBuild::V5_9_1;
 		else if (digest == kOutfitStudio610Sha256)
 			g_build = OutfitStudioBuild::V6_1_0;
+		else if (digest == kOutfitStudio620Sha256)
+			g_build = OutfitStudioBuild::V6_2_0;
 	}
 	const char* name = "NAO reconhecido";
 	if (g_build == OutfitStudioBuild::V5_8_2)
@@ -97,6 +106,8 @@ OutfitStudioBuild CurrentOutfitStudio() {
 		name = "5.9.1 reconhecido";
 	else if (g_build == OutfitStudioBuild::V6_1_0)
 		name = "6.1.0 reconhecido";
+	else if (g_build == OutfitStudioBuild::V6_2_0)
+		name = "6.2.0 reconhecido";
 	LogF("host nativo: Outfit Studio %s", name);
 	return g_build;
 }
@@ -115,6 +126,10 @@ bool IsSupportedOutfitStudio591() {
 
 bool IsSupportedOutfitStudio610() {
 	return CurrentOutfitStudio() == OutfitStudioBuild::V6_1_0;
+}
+
+bool IsSupportedOutfitStudio620() {
+	return CurrentOutfitStudio() == OutfitStudioBuild::V6_2_0;
 }
 
 } // namespace HostBuild
